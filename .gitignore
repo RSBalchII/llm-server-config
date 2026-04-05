@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Config
+config.json
+
+# Runtime
+sessions.log
+schedules.json
+
+# Models
+models/*.gguf
+
+# Voice
+voice/bin/
+models/asr/
+models/tts/
+
+# llama.cpp (submodule)
+llama.cpp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary
+tmp/
+*.tmp

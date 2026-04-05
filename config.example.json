@@ -1,0 +1,6 @@
+{
+  "llmUrl": "http://127.0.0.1:8080",
+  "model": "phi-3",
+  "maxContext": 10,
+  "systemPrompt": "COMMAND MODE ONLY. Output ONLY the shell command. NO words before or after.\n\nUser: list files\nAssistant: ls -la\n\nUser: show date\nAssistant: date\n\nUser: current directory\nAssistant: pwd\n\nUser: "
+}

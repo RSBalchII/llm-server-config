@@ -1,102 +1,295 @@
-# 🦙 Llama Model Server
+# 🤖 micro-nanobot
 
-Local GGUF model server for running Qwen 3.5 and Gemma 4 models on Windows ARM64.
+**Minimal AI Agent Harness** - Single file, zero dependencies, works with llama.cpp server.
 
-## Quick Start
+Inspired by [microclaw](https://github.com/microclaw/microclaw).
+
+---
+
+## Quick Start (Termux on Android)
+
+### Start with Model Selection
 
 ```bash
-# Start the server (double-click or run)
-start.bat
+cd ~/llm-server-config
 
-# Or manually
-cd C:\Users\rsbii\Projects\llama-server
-npm start
-
-# Or use the model selector
-npm run select
+# Interactive model selector + starter
+./start.sh
 ```
 
-**Web UI:** http://localhost:3000
+### Download Models
 
-## Available Models
+```bash
+# Download new models
+./download-model.sh
 
-| Model | Size | Context | Description |
-|-------|------|---------|-------------|
-| Qwen3.5-9B.Q4_K_M.gguf | 5.24 GB | 256K | "Qwopus" - Claude Opus competitor |
-| Qwen3.5-4B.Q4_K_M.gguf | 2.52 GB | 256K | Lightweight Qwen 3.5 |
-| gemma-4-E4B-it-IQ4_NL.gguf | 4.5 GB | 128K | Google Gemma 4 Edge |
+# Options include:
+# - Qwen3.5 2B/4B (Best for agents)
+# - Gemma 4 5B/8B (New! Google)
+# - LFM 2.5 350M (Fastest)
+```
+
+---
+
+## Usage
+
+### Three Modes
+
+**1. Tool Mode (default)** - Execute commands directly
+
+```
+👤 You: list files
+🎯 Intent: ls -la
+📋 Result: total 24...
+```
+
+**2. Plan Mode** - Multi-step task execution
+
+```
+👤 You: /plan
+🧠 Mode: PLAN
+
+👤 You: find the AEN project and show its structure
+🧠 Complex task detected - creating plan...
+📝 Plan:
+  1. find . -type d -name "AEN"
+  2. cd ./AEN && ls -la
+  3. ls -d */
+📋 Executing 3 step plan...
+💬 Summary: Found AEN project at ./AEN with 3 subdirectories...
+```
+
+**3. Chat Mode** - Conversation only
+
+```
+👤 You: /chat
+💬 Mode: CHAT
+
+👤 You: what is quantum computing?
+🤔 Thinking...
+💬 Quantum computing is a type of computing...
+```
+
+### Mode Commands
+
+- `/tool` - Switch to tool execution mode (default)
+- `/plan` - Switch to multi-step planning mode
+- `/chat` - Switch to conversation mode
+- `/t <command>` - One-time tool execution (from any mode)
+
+### Special Commands
+
+- `/quit` or `/exit` - Exit the agent
+- `/clear` - Clear conversation context
+- `/config` - Show current configuration
+
+### Voice Commands (Optional)
+
+- `/voice` or `/voice on` - Enable voice mode
+- `/voice off` - Disable voice mode
+- `/speak` or `/speak on` - Enable spoken responses
+- `/speak off` - Disable spoken responses
+- `/handsfree` or `/handsfree on` - Enable hands-free mode
+- `/handsfree off` - Disable hands-free mode
+
+### Schedule Commands
+
+- `/schedule every day at 8am list files` - Create a schedule
+- `/schedules` - List all schedules
+- `/unschedule <id>` - Remove a schedule
+
+---
+
+## Installation (Termux)
+
+### Build llama.cpp
+
+```bash
+# Install build dependencies
+pkg install git cmake clang python -y
+
+# Clone and build llama.cpp
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp
+mkdir build && cd build
+cmake -DGGML_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF ..
+make llama-server -j2
+cd ../..
+```
+
+### Install micro-nanobot
+
+```bash
+# Clone or copy this project
+cd ~/llm-server-config
+
+# Install dependencies (none required!)
+npm install  # Zero dependencies!
+
+# Optional: Install voice support
+./voice/install.sh
+```
+
+---
 
 ## Configuration
 
-**Default Settings:**
-- Context Size: `262144` (256K tokens)
-- Max Output: `8192` tokens
-- GPU Layers: `99` (full offload)
-- CPU Threads: `4`
+Copy `config.example.json` to `config.json` and edit:
 
-Edit `server-cjs.js` to customize.
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/models` | GET | List available models |
-| `/api/load` | POST | Load a model |
-| `/api/unload` | POST | Unload current model |
-| `/api/chat` | POST | Chat with loaded model |
-| `/api/completions` | POST | OpenAI-compatible chat |
-| `/health` | GET | Server health check |
-
-### Examples
-
-**Load a model:**
-```bash
-curl -X POST http://localhost:3000/api/load \
-  -H "Content-Type: application/json" \
-  -d '{"modelPath":"Qwen3.5-4B.Q4_K_M.gguf"}'
+```json
+{
+  "llmUrl": "http://127.0.0.1:8080",
+  "model": "qwen-3.5-2b",
+  "maxContext": 10,
+  "systemPrompt": "COMMAND MODE ONLY. Output ONLY the shell command..."
+}
 ```
 
-**Chat:**
-```bash
-curl -X POST http://localhost:3000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"Hello!","maxTokens":256}'
-```
+---
 
-**OpenAI-compatible:**
-```bash
-curl -X POST http://localhost:3000/api/completions \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"Hello"}]}'
-```
+## Tool Format
 
-## Qwen Coder Integration
+The agent uses simple regex-based parsing (tiny model friendly):
 
-Configure as an OpenAI-compatible endpoint:
+| Tool | Format |
+|------|--------|
+| Bash | `I'll run: <command>` |
+| Read | `I'll read: <filepath>` |
+| Write | `I'll write: <filepath>\n<content>` |
 
-**Base URL:** `http://localhost:3000/api/completions`
+---
 
-**Model name:** `qwen3.5-4b` or `qwen3.5-9b`
+## Model Recommendations
+
+| Model | Size | RAM | Best For |
+|-------|------|-----|----------|
+| **Qwen3.5 2B Distilled** | 2B | 1.5GB | **Best balance** ✅ |
+| **Qwen3.5 4B Distilled** | 4B | 3GB | Better reasoning |
+| **Qwen3.5 4B Abliterated** | 4B | 3GB | Unrestricted agent |
+| **Gemma 4 E2B** | 5B | 4GB | **New! Google** |
+| **Gemma 4 E4B** | 8B | 6GB | Best quality |
+| **LFM 2.5 350M** | 0.4B | 0.5GB | Fastest testing |
+
+---
 
 ## Architecture
 
-This server uses:
-- **llama.cpp** (b8660) - Official ARM64 Windows binary for inference
-- **Express.js** - Web server and API
-- **GGUF models** - Quantized model format
+```
+agent.js (~500 LOC)
+├── LLM Client (HTTP to llama.cpp)
+├── Intent Parser (skill-based)
+├── Tools (bash, read_file, write_file)
+├── Safety Layer (dangerous command detection)
+├── Planning System (multi-step tasks)
+├── Context Manager (truncation)
+├── Voice Manager (ASR + TTS) [optional]
+└── Scheduler (natural language → cron) [optional]
+```
 
-The llama.cpp `llama-server.exe` runs as a subprocess on port 8080, with the Node.js server proxying requests on port 3000.
+### Skills System
 
-## Performance
+Skills are loaded from `.md` files in the `skills/` directory:
 
-On Dell XPS 13 (Qualcomm ARM64, 16GB RAM):
-- **Qwen3.5-4B**: ~2-4 tokens/second
-- **Qwen3.5-9B**: ~1-2 tokens/second
-- **Gemma-4-E4B**: ~2-3 tokens/second
+- `git.md` - Git operations
+- `files.md` - File operations
+- `system.md` - System information
+- `search.md` - Search and find
+- `help.md` - Help commands
 
-## Requirements
+Add your own skills by creating new `.md` files!
 
-- Windows 11 ARM64
-- 16GB RAM recommended
-- Node.js 18+
-- ~15GB storage for all models
+---
+
+## Qwen Code Integration
+
+See `QWEN_LOCAL_MODEL_SETUP.md` for comprehensive Qwen Code configuration with local models.
+
+### Quick Config
+
+Add to `~/.qwen/settings.json`:
+
+```json
+{
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "local-qwen3.5-2b",
+        "name": "Qwen3.5 2B (Local)",
+        "baseUrl": "http://127.0.0.1:8080/v1",
+        "envKey": "LOCAL_API_KEY",
+        "generationConfig": {
+          "contextWindowSize": 262144,
+          "samplingParams": {
+            "temperature": 0.6,
+            "max_tokens": 8192
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Project Structure
+
+```
+llm-server-config/
+├── agent.js              # Main agent (~500 LOC)
+├── config.json           # Configuration
+├── config.example.json   # Example config
+├── package.json          # Zero dependencies!
+├── start.sh              # Termux starter with model selector
+├── download-model.sh     # Model downloader
+├── start.bat             # Windows starter
+│
+├── skills/               # Extensible intent patterns
+│   ├── loader.js         # Skill file parser
+│   ├── git.md            # Git operations
+│   ├── files.md          # File operations
+│   ├── system.md         # System info
+│   ├── search.md         # Search/find
+│   └── help.md           # Help commands
+│
+├── scheduler/            # Natural language scheduling
+│   ├── parser.js         # "every day at 8am" → cron
+│   └── manager.js        # Schedule storage
+│
+├── voice/                # Voice support (optional)
+│   ├── manager.js        # Voice orchestration
+│   ├── asr.js            # Speech-to-text
+│   ├── tts.js            # Text-to-speech
+│   └── install.sh        # Voice installer
+│
+└── llama.cpp/            # llama.cpp submodule
+    └── build/bin/llama-server
+```
+
+---
+
+## Safety Features
+
+The agent includes a safety layer that blocks or confirms dangerous commands:
+
+| Command | Action | Reason |
+|---------|--------|--------|
+| `rm -rf /` | BLOCKED | System file deletion |
+| `dd` | BLOCKED | Disk partition overwrite |
+| `mkfs` | BLOCKED | Filesystem format |
+| `sudo` | CONFIRM | Elevated privileges |
+| `chmod 777` | CONFIRM | World-writable files |
+| `kill -9` | CONFIRM | Force kill process |
+
+---
+
+## License
+
+MIT
+
+---
+
+## Related
+
+- [QWEN_LOCAL_MODEL_SETUP.md](./QWEN_LOCAL_MODEL_SETUP.md) - Qwen Code configuration guide
+- [llama.cpp](https://github.com/ggerganov/llama.cpp) - LLM inference engine

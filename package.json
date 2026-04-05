@@ -1,18 +1,18 @@
 {
-  "name": "llm-server-config",
-  "version": "1.0.0",
-  "description": "Local Llama server for running GGUF models with Qwen Coder integration",
-  "main": "server.js",
+  "name": "micro-nanobot",
+  "version": "0.1.0",
+  "description": "Minimal AI agent harness with voice support - llama.cpp wrapper",
+  "type": "module",
+  "main": "agent.js",
   "scripts": {
-    "start": "node server.js",
-    "select": "node select-model.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node agent.js",
+    "dev": "node --watch agent.js",
+    "install-voice": "./voice/install.sh"
   },
-  "keywords": ["llama", "gguf", "qwen", "gemma", "local-llm"],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "cors": "^2.8.6",
-    "express": "^5.2.1"
+  "keywords": ["ai", "agent", "llm", "minimal", "voice", "llama-cpp"],
+  "license": "MIT",
+  "dependencies": {},
+  "optionalDependencies": {
+    "sherpa-onnx-node": "*"
   }
 }
