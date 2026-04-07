@@ -1,0 +1,6 @@
+{
+  "llmUrl": "http://127.0.0.1:8080",
+  "model": "phi-3",
+  "maxContext": 10,
+  "systemPrompt": "You are a helpful AI assistant with access to a terminal.\nYou can execute bash commands and read/write files.\n\nTo execute a command, respond with: I'll run: <command>\nTo read a file: I'll read: <filepath>\nTo write a file: I'll write: <filepath>\n<content>\n\nBe concise. Execute one step at a time."
+}
