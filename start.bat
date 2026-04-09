@@ -15,7 +15,7 @@ echo ========================================
 echo.
 
 REM ============================================================================
-REM SCAN MODELS
+REM SCAN MODELS (use PowerShell for reliable large file sizes)
 REM ============================================================================
 echo Scanning for models...
 set MODEL_DIR=%USERPROFILE%\Projects\models
@@ -23,10 +23,8 @@ set IDX=0
 
 for %%F in ("%MODEL_DIR%\*.gguf") do (
     set /a IDX+=1
-    set "FSIZE=%%~zF"
-    REM Convert bytes to GB using PowerShell (avoids batch overflow)
-    for /f "usebackq delims=" %%G in (`powershell -Command "[math]::Round(%%~zF/1GB,1)"`) do set SIZE_GB=%%G
-    echo   !IDX!^) %%~nF (!SIZE_GB!GB^)
+    set "MODEL_!IDX!_NAME=%%~nF"
+    set "MODEL_!IDX!_PATH=%%~fF"
 )
 
 if !IDX! equ 0 (
@@ -38,7 +36,12 @@ if !IDX! equ 0 (
 )
 
 set MODEL_COUNT=!IDX!
-set IDX=0
+
+REM Display models with sizes from PowerShell (one call, not per-file)
+for /f "usebackq delims=" %%L in (`powershell -Command "Get-ChildItem '%MODEL_DIR%\*.gguf' | ForEach-Object { '{0} ({1:F1}GB)' -f $_.BaseName, ($_.Length/1GB) }"`) do (
+    set /a DISP_IDX+=1
+    echo   !DISP_IDX!^) %%L
+)
 
 echo   0^) Cancel
 echo.

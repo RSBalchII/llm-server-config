@@ -1,1 +1,0 @@
-{"name":"micro-nanobot","version":"0.3.0","description":"Minimal AI agent with node-llama-cpp","type":"module","main":"server.js","dependencies":{"node-llama-cpp":"latest"}}  

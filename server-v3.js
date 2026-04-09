@@ -1,316 +1,151 @@
 #!/usr/bin/env node
 /**
  * micro-nanobot Server v0.3.0
- * Uses node-llama-cpp directly - no external llama-server needed
+ * node-llama-cpp native - raw completions, no chat session wrappers
  */
 
 import { createServer } from 'http';
 import { exec } from 'child_process';
-import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'fs';
 import { promisify } from 'util';
 import { join } from 'path';
 import readline from 'readline';
-import {
-    getLlama,
-    LlamaChatSession,
-    QwenChatWrapper,
-    GemmaChatWrapper,
-    GeneralChatWrapper,
-    defineChatSessionFunction
-} from 'node-llama-cpp';
+import { getLlama } from 'node-llama-cpp';
 
 const PROXY_PORT = 8888;
 const MODEL_DIR = 'C:\\Users\\rsbiiw\\Projects\\models';
 const execAsync = promisify(exec);
 
-// ── Tool definitions ─────────────────────────────────────────────
-const TOOLS = {
-    run_shell_command: defineChatSessionFunction({
-        description: 'Execute a shell command and return the output',
-        parameters: {
-            type: 'object',
-            properties: {
-                command: { type: 'string', description: 'Command to execute' }
-            },
-            required: ['command']
-        },
-        async execute(params) {
-            try {
-                const { stdout, stderr } = await execAsync(params.command, {
-                    maxBuffer: 1024 * 1024 * 10,
-                    cwd: process.cwd()
-                });
-                return stdout || stderr || '(empty output)';
-            } catch (err) {
-                return `Error: ${err.message}`;
-            }
-        }
-    }),
-    list_directory: defineChatSessionFunction({
-        description: 'List the contents of a directory. Returns filenames and directories.',
-        parameters: {
-            type: 'object',
-            properties: {
-                path: { type: 'string', description: 'Directory path to list' }
-            },
-            required: ['path']
-        },
-        async execute(params) {
-            const dirPath = params.path || '.';
-            if (!existsSync(dirPath)) return `Path not found: ${dirPath}`;
-            try {
-                const items = readdirSync(dirPath);
-                const dirs = [], files = [];
-                for (const item of items) {
-                    const full = join(dirPath, item);
-                    if (statSync(full).isDirectory()) dirs.push(item + '/');
-                    else files.push(item);
-                }
-                return [...dirs.sort(), ...files.sort()].join('\n') || '(empty directory)';
-            } catch (err) {
-                return `Error: ${err.message}`;
-            }
-        }
-    }),
-    read_file: defineChatSessionFunction({
-        description: 'Read the contents of a file. Use for viewing file contents.',
-        parameters: {
-            type: 'object',
-            properties: {
-                path: { type: 'string', description: 'File path to read' }
-            },
-            required: ['path']
-        },
-        async execute(params) {
-            if (!existsSync(params.path)) return `File not found: ${params.path}`;
-            try {
-                const content = readFileSync(params.path, 'utf-8');
-                const maxLen = 15000;
-                return content.length > maxLen
-                    ? content.substring(0, maxLen) + `\n\n... (truncated, ${content.length - maxLen} more chars)`
-                    : content;
-            } catch (err) {
-                return `Error: ${err.message}`;
-            }
-        }
-    }),
-    write_file: defineChatSessionFunction({
-        description: 'Write content to a file. Creates the file if it does not exist, overwrites if it exists.',
-        parameters: {
-            type: 'object',
-            properties: {
-                path: { type: 'string', description: 'File path to write' },
-                content: { type: 'string', description: 'Content to write' }
-            },
-            required: ['path', 'content']
-        },
-        async execute(params) {
-            try {
-                const { writeFile } = await import('fs/promises');
-                await writeFile(params.path, params.content, 'utf-8');
-                return `✓ Written ${params.path} (${params.content.length} bytes)`;
-            } catch (err) {
-                return `Error: ${err.message}`;
-            }
-        }
-    }),
-    grep_search: defineChatSessionFunction({
-        description: 'Search for a pattern in files. Like grep.',
-        parameters: {
-            type: 'object',
-            properties: {
-                pattern: { type: 'string', description: 'Search pattern' },
-                path: { type: 'string', description: 'Directory to search in (default: current)' }
-            },
-            required: ['pattern']
-        },
-        async execute(params) {
-            const searchPath = params.path || '.';
-            try {
-                const isWin = process.platform === 'win32';
-                const cmd = isWin
-                    ? `findstr /s /n /i "${params.pattern}" "${searchPath}\\*.*"`
-                    : `grep -rn "${params.pattern}" "${searchPath}"`;
-                const { stdout } = await execAsync(cmd, { maxBuffer: 1024 * 1024 * 10 });
-                const lines = stdout.trim().split('\n').filter(Boolean);
-                const maxLines = 50;
-                if (lines.length > maxLines) {
-                    return lines.slice(0, maxLines).join('\n') + `\n\n... (${lines.length - maxLines} more matches)`;
-                }
-                return lines.join('\n') || 'No matches found';
-            } catch (err) {
-                return err.stdout?.trim() || `No matches found for: ${params.pattern}`;
-            }
-        }
-    }),
-    glob_search: defineChatSessionFunction({
-        description: 'Find files matching a glob pattern.',
-        parameters: {
-            type: 'object',
-            properties: {
-                pattern: { type: 'string', description: 'Glob pattern (e.g., **/*.js)' },
-                path: { type: 'string', description: 'Base directory to search in' }
-            },
-            required: ['pattern']
-        },
-        async execute(params) {
-            const searchPath = params.path || '.';
-            try {
-                const { glob } = await import('glob');
-                const files = await glob(params.pattern, {
-                    cwd: searchPath,
-                    nodir: true
-                });
-                return files.slice(0, 50).join('\n') || 'No files found';
-            } catch {
-                // Fallback without glob package
-                try {
-                    const isWin = process.platform === 'win32';
-                    const cmd = isWin
-                        ? `dir /b /s "${searchPath}\\${params.pattern}"`
-                        : `find "${searchPath}" -name "${params.pattern}" -type f`;
-                    const { stdout } = await execAsync(cmd, { maxBuffer: 1024 * 1024 * 10 });
-                    const files = stdout.trim().split('\n').filter(Boolean);
-                    return files.slice(0, 50).join('\n') || 'No files found';
-                } catch (err2) {
-                    return `Error: ${err2.message}`;
-                }
-            }
-        }
-    })
-};
-
-const TOOL_NAMES = Object.keys(TOOLS);
+// ── System prompt ────────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are a helpful AI coding assistant. Respond clearly with proper spacing and formatting.`;
 
 // ── Discover models ──────────────────────────────────────────────
 function scanModels() {
     if (!existsSync(MODEL_DIR)) return [];
-    const models = [];
-    for (const file of readdirSync(MODEL_DIR)) {
-        if (file.endsWith('.gguf')) {
+    return readdirSync(MODEL_DIR)
+        .filter(f => f.endsWith('.gguf'))
+        .map(file => {
             const path = join(MODEL_DIR, file);
             const size = statSync(path).size;
-            const sizeGB = (size / (1024 ** 3)).toFixed(1);
-            models.push({ name: file, path, sizeGB });
-        }
-    }
-    return models.sort((a, b) => a.name.localeCompare(b.name));
+            return { name: file, path, sizeGB: (size / 1024 ** 3).toFixed(1) };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// ── Auto-detect chat wrapper ────────────────────────────────────
-function detectChatWrapper(modelName) {
-    const lower = modelName.toLowerCase();
-    if (lower.includes('qwen') || lower.includes('diffcoder') || lower.includes('deepseek')) return new QwenChatWrapper();
-    if (lower.includes('gemma')) return new GemmaChatWrapper();
-    return new GeneralChatWrapper();
+// ── Detect chat template from model name ─────────────────────────
+function detectTemplate(modelName) {
+    const n = modelName.toLowerCase();
+    if (n.includes('qwen3') || n.includes('deepseek')) return 'qwen3';
+    if (n.includes('gemma')) return 'gemma';
+    if (n.includes('qwen')) return 'qwen';
+    return 'alpaca';
+}
+
+// ── Format messages into model-specific chat template ────────────
+function formatPrompt(messages, template) {
+    let text = '';
+    switch (template) {
+        case 'qwen3':
+        case 'qwen':
+            // <|im_start|>system\n...\n<|im_end|>\n<|im_start|>user\n...\n<|im_end|>\n<|im_start|>assistant
+            text = '<|im_start|>system\n' + SYSTEM_PROMPT + '<|im_end|>\n';
+            for (const msg of messages) {
+                const role = msg.role === 'assistant' ? 'assistant' : 'user';
+                const content = typeof msg.content === 'string'
+                    ? msg.content
+                    : msg.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+                text += `<|im_start|>${role}\n${content}<|im_end|>\n`;
+            }
+            text += '<|im_start|>assistant\n';
+            break;
+        case 'gemma':
+            // <start_of_turn>user\n...\n<end_of_turn>\n<start_of_turn>model\n
+            for (const msg of messages) {
+                const role = msg.role === 'assistant' ? 'model' : 'user';
+                const content = typeof msg.content === 'string' ? msg.content : msg.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+                text += `<start_of_turn>${role}\n${content}<end_of_turn>\n`;
+            }
+            text += '<start_of_turn>model\n';
+            break;
+        default:
+            // Alpaca: ### Instruction:\n...\n\n### Response:
+            text = SYSTEM_PROMPT + '\n\n';
+            for (const msg of messages) {
+                if (msg.role === 'user') text += `### Instruction:\n${typeof msg.content === 'string' ? msg.content : msg.content.filter(c => c.type === 'text').map(c => c.text).join('\n')}\n\n`;
+                else if (msg.role === 'assistant') text += `### Response:\n${typeof msg.content === 'string' ? msg.content : msg.content.filter(c => c.type === 'text').map(c => c.text).join('\n')}\n\n`;
+            }
+            text += '### Response:\n';
+    }
+    return text;
+}
+
+// ── Extract stop tokens per template ─────────────────────────────
+function stopTokens(template) {
+    switch (template) {
+        case 'qwen3':
+        case 'qwen':
+            return ['<|im_end|>', '<|endoftext|>'];
+        case 'gemma':
+            return ['<end_of_turn>', '<eos>'];
+        default:
+            return ['### Instruction:', '### Response:'];
+    }
 }
 
 // ── Main ─────────────────────────────────────────────────────────
 async function main() {
-    // Keep one readline instance alive for the whole session
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-        terminal: true
-    });
-    rl.on('close', () => {});  // Prevent exit on close
-
-    function ask(prompt) {
-        return new Promise(resolve => rl.question(prompt, resolve));
-    }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    const ask = prompt => new Promise(resolve => rl.question(prompt, resolve));
 
     const models = scanModels();
-    if (models.length === 0) {
+    if (!models.length) {
         console.error(`❌ No .gguf models found in ${MODEL_DIR}`);
         process.exit(1);
     }
 
     console.log('\n══════════════════════════════════════════════');
     console.log('  micro-nanobot Server v0.3.0');
-    console.log('  node-llama-cpp (no external llama-server)');
+    console.log('  node-llama-cpp native completions');
     console.log('══════════════════════════════════════════════\n');
 
-    // Model selection
     console.log('Available models:');
-    for (let i = 0; i < models.length; i++) {
-        console.log(`  ${i + 1}) ${models[i].name} (${models[i].sizeGB}GB)`);
-    }
-    console.log(`  0) Cancel\n`);
+    models.forEach((m, i) => console.log(`  ${i + 1}) ${m.name} (${m.sizeGB}GB)`));
+    console.log('  0) Cancel\n');
 
-    const answer = await ask('Select model (number): ');
+    const choice = parseInt(await ask('Select model (number): '));
+    if (choice < 1 || choice > models.length) { process.exit(0); }
 
-    const choice = parseInt(answer);
-    if (choice < 1 || choice > models.length) {
-        console.log('Cancelled.');
-        rl.close();
-        process.exit(0);
-    }
+    const sel = models[choice - 1];
+    const sizeGB = parseFloat(sel.sizeGB);
+    const maxLayers = Math.min(Math.floor(16 / (sizeGB / 41)), 41);
+    console.log(`\n📦 Model: ${sel.name}`);
+    console.log(`   Size: ${sel.sizeGB}GB, ~41 layers total`);
+    console.log(`   Est. max GPU layers on 16GB VRAM: ~${maxLayers}`);
 
-    const selectedModel = models[choice - 1];
-    // Show VRAM info
-    const sizeGB = parseFloat(selectedModel.sizeGB);
-    const estimatedLayers = Math.min(Math.floor(16 / (sizeGB / 41)), 41); // rough: 16GB / (size/total_layers)
-    console.log(`\n📦 Model: ${selectedModel.name}`);
-    console.log(`   Size: ${selectedModel.sizeGB}GB, ~41 layers total`);
-    console.log(`   Estimated max GPU layers on 16GB VRAM: ~${estimatedLayers}`);
+    const gpuRaw = await ask('GPU layers (number, "auto", or "max", default: auto): ');
+    const gpuLayers = gpuRaw.toLowerCase() === 'max' ? 'max'
+        : (gpuRaw.toLowerCase() === 'auto' || !gpuRaw) ? 'auto'
+        : parseInt(gpuRaw) || 'auto';
 
-    // GPU layers selection
-    const gpuAnswer = await ask(`GPU layers (number, "auto", or "max", default: auto): `);
-
-    let gpuLayers;
-    if (gpuAnswer.toLowerCase() === 'auto' || gpuAnswer === '') {
-        gpuLayers = 'auto';
-    } else if (gpuAnswer.toLowerCase() === 'max') {
-        gpuLayers = 'max';
-    } else {
-        gpuLayers = parseInt(gpuAnswer);
-        if (isNaN(gpuLayers)) {
-            console.log('Invalid number, using auto');
-            gpuLayers = 'auto';
-        } else {
-            // Warning for large models on small VRAM
-            if (sizeGB > 8 && gpuLayers > 33) {
-                console.log(`⚠️  Warning: ${selectedModel.name} (${sizeGB}GB) may not fit with ${gpuLayers} GPU layers`);
-                console.log(`   Expected ~${(sizeGB * 0.4).toFixed(0)}GB VRAM for ${gpuLayers} layers`);
-            }
-        }
+    if (typeof gpuLayers === 'number' && sizeGB > 8 && gpuLayers > 33) {
+        console.log(`⚠️  ${sel.name} (${sizeGB}GB) may not fit with ${gpuLayers} GPU layers`);
     }
 
     console.log(`🎮 GPU layers: ${gpuLayers}`);
     console.log('⏳ Loading model...\n');
 
-    // Load model using node-llama-cpp
     const llama = await getLlama({ gpu: 'cuda' });
-    const model = await llama.loadModel({
-        modelPath: selectedModel.path,
-        gpuLayers: gpuLayers
-    });
+    const model = await llama.loadModel({ modelPath: sel.path, gpuLayers });
+    const ctx = await model.createContext({ contextSize: Math.min(16384, model.trainContextSize || 8192) });
+    const seq = ctx.getSequence();
+    const template = detectTemplate(sel.name);
 
-    const context = await model.createContext({
-        // Respect model's training context limit
-        contextSize: Math.min(16384, model.trainContextSize || 16384)
-    });
+    console.log(`✅ Model loaded (GPU layers: ${model.gpuLayers})`);
+    console.log(`   Chat template: ${template}`);
+    console.log(`   Context: ${ctx.contextSize} tokens\n`);
 
-    // Get the default sequence
-    const sequence = context.getSequence();
-
-    const chatWrapper = detectChatWrapper(selectedModel.name);
-
-    const session = new LlamaChatSession({
-        contextSequence: sequence,
-        chatWrapper: chatWrapper,
-        systemPrompt: `You are a helpful AI coding assistant. Respond clearly and concisely. Use proper formatting in your responses. Always use complete sentences and proper spacing between words.`,
-        modelFunctions: TOOL_NAMES.map(name => ({
-            name,
-            ...TOOLS[name]
-        }))
-    });
-
-    // Show actual GPU layers used
-    console.log(`✅ Model loaded (GPU layers: ${model.gpuLayers})\n`);
-
-    // ── HTTP Server ──────────────────────────────────────────
     const server = createServer(async (req, res) => {
+        // CORS
         if (req.method === 'OPTIONS') {
             res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
@@ -320,32 +155,26 @@ async function main() {
             res.end();
             return;
         }
-
         res.setHeader('Access-Control-Allow-Origin', '*');
 
-        // ── Models endpoint ─────────────────────────────
+        // GET /v1/models
         if (req.url === '/v1/models' && req.method === 'GET') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 object: 'list',
-                data: [{
-                    id: selectedModel.name,
-                    object: 'model',
-                    created: Math.floor(Date.now() / 1000),
-                    owned_by: 'node-llama-cpp'
-                }]
+                data: [{ id: sel.name, object: 'model', created: Math.floor(Date.now() / 1000), owned_by: 'node-llama-cpp' }]
             }));
             return;
         }
 
-        // ── Health endpoint ─────────────────────────────
+        // GET /health
         if (req.url === '/health' && req.method === 'GET') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'ok', model: selectedModel.name, gpuLayers: model.gpuLayers }));
+            res.end(JSON.stringify({ status: 'ok', model: sel.name, gpuLayers: model.gpuLayers }));
             return;
         }
 
-        // ── Chat completions ────────────────────────────
+        // POST /v1/chat/completions
         if (req.url.includes('/chat/completions') && req.method === 'POST') {
             let body = '';
             req.on('data', c => body += c);
@@ -354,111 +183,108 @@ async function main() {
             try {
                 const parsed = JSON.parse(body);
                 const messages = parsed.messages || [];
-                const lastMsg = messages[messages.length - 1];
+                if (!messages.length) throw new Error('Empty messages array');
 
-                // Handle both string and array content (multimodal)
-                let userMsg = '';
-                if (typeof lastMsg?.content === 'string') {
-                    userMsg = lastMsg.content;
-                } else if (Array.isArray(lastMsg?.content)) {
-                    userMsg = lastMsg.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-                }
+                const prompt = formatPrompt(messages, template);
+                const stops = stopTokens(template);
+                const stream = parsed.stream || false;
 
-                if (!userMsg) {
-                    throw new Error('Empty prompt');
-                }
+                console.log(`💬 Chat request (${messages.length} messages, template: ${template})`);
 
-                console.log(`💬 Chat request: ${userMsg.substring(0, 120)}...`);
-
-                // Timeout for large models (5 min)
-                const timeout = setTimeout(() => {
-                    console.error('⏰ Chat request timed out (5 min limit)');
-                }, 300000);
-
-                // Always generate response
-                const response = await session.prompt(userMsg, {
-                    maxTokens: 2048,
-                    temperature: 0.2,
-                    topK: 40,
-                    topP: 0.9,
-                    repeatPenalty: 1.1,
-                    repeatPenaltyLastTokens: 64
-                });
-
-                clearTimeout(timeout);
-
-                const text = typeof response === 'string' ? response : response?.responseText || '';
-                console.log(`✅ Response: ${text.substring(0, 120)}...`);
-                console.log(`   [Raw type: ${typeof response}, keys: ${typeof response === 'object' ? Object.keys(response).join(',') : 'N/A'}]`);
-
-                // If client requested streaming, send SSE
-                if (parsed.stream) {
-                    res.writeHead(200, {
-                        'Content-Type': 'text/event-stream',
-                        'Cache-Control': 'no-cache',
-                        'Connection': 'keep-alive',
-                        'Access-Control-Allow-Origin': '*'
+                // Non-streaming (default)
+                if (!stream) {
+                    const result = await seq.complete(prompt, {
+                        maxTokens: parsed.max_tokens ?? 2048,
+                        temperature: parsed.temperature ?? 0.6,
+                        topK: parsed.top_k ?? 40,
+                        topP: parsed.top_p ?? 0.9,
+                        stopSequences: stops,
+                        repeatPenalty: 1.1
                     });
 
-                    // Send chunks (simulate streaming)
-                    const words = text.split(' ');
-                    const chunkSize = Math.max(1, Math.floor(words.length / 8));
-                    for (let i = 0; i < words.length; i += chunkSize) {
-                        const chunk = words.slice(i, i + chunkSize).join(' ');
-                        const data = JSON.stringify({
-                            id: 'chatcmpl-' + Date.now(),
-                            object: 'chat.completion.chunk',
-                            created: Math.floor(Date.now() / 1000),
-                            model: selectedModel.name,
-                            choices: [{
-                                index: 0,
-                                delta: { content: chunk },
-                                finish_reason: null
-                            }]
-                        });
-                        res.write(`data: ${data}\n\n`);
-                        await new Promise(r => setTimeout(r, 50));
-                    }
+                    const text = typeof result === 'string' ? result : result?.text || '';
+                    const tokens = text.split(/\s+/).filter(Boolean).length;
 
-                    // Final chunk with finish_reason
-                    res.write(`data: ${JSON.stringify({
-                        id: 'chatcmpl-' + Date.now(),
-                        object: 'chat.completion.chunk',
-                        created: Math.floor(Date.now() / 1000),
-                        model: selectedModel.name,
-                        choices: [{
-                            index: 0,
-                            delta: {},
-                            finish_reason: 'stop'
-                        }]
-                    })}\n\n`);
-                    res.write('data: [DONE]\n\n');
-                    res.end();
-                } else {
-                    // Non-streaming response
+                    console.log(`✅ Response: ${text.substring(0, 100)}...\n`);
+
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
                         id: 'chatcmpl-' + Date.now(),
                         object: 'chat.completion',
                         created: Math.floor(Date.now() / 1000),
-                        model: selectedModel.name,
+                        model: sel.name,
                         choices: [{
                             index: 0,
                             message: { role: 'assistant', content: text },
                             finish_reason: 'stop'
                         }],
-                        usage: { prompt_tokens: 0, completion_tokens: text.split(/\s+/).length, total_tokens: text.split(/\s+/).length }
+                        usage: { prompt_tokens: 0, completion_tokens: tokens, total_tokens: tokens }
                     }));
+                    return;
                 }
+
+                // Streaming (SSE) - complete with onToken callback
+                res.writeHead(200, {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'Access-Control-Allow-Origin': '*'
+                });
+
+                let fullText = '';
+                let tokenCount = 0;
+
+                const result = await seq.complete(prompt, {
+                    maxTokens: parsed.max_tokens ?? 2048,
+                    temperature: parsed.temperature ?? 0.6,
+                    topK: parsed.top_k ?? 40,
+                    topP: parsed.top_p ?? 0.9,
+                    stopSequences: stops,
+                    repeatPenalty: 1.1,
+                    onToken: (tokens, ctx) => {
+                        // tokens is an array of token strings from the current generation step
+                        for (const t of tokens) {
+                            fullText += t;
+                            tokenCount++;
+                            const data = JSON.stringify({
+                                id: 'chatcmpl-' + Date.now(),
+                                object: 'chat.completion.chunk',
+                                created: Math.floor(Date.now() / 1000),
+                                model: sel.name,
+                                choices: [{
+                                    index: 0,
+                                    delta: { content: t },
+                                    finish_reason: null
+                                }]
+                            });
+                            res.write(`data: ${data}\n\n`);
+                        }
+                    }
+                });
+
+                // Final chunk
+                res.write(`data: ${JSON.stringify({
+                    id: 'chatcmpl-' + Date.now(),
+                    object: 'chat.completion.chunk',
+                    created: Math.floor(Date.now() / 1000),
+                    model: sel.name,
+                    choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+                })}\n\n`);
+                res.write('data: [DONE]\n\n');
+                res.end();
+
+                console.log(`✅ Streamed ${tokenCount} tokens\n`);
             } catch (err) {
                 console.error('❌ Chat error:', err.message);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: { message: err.message, type: 'internal_error' } }));
+                if (!res.headersSent) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: { message: err.message, type: 'internal_error' } }));
+                }
             }
             return;
         }
 
-        // ── Fallback ────────────────────────────────────
+        // 404
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Not found' }));
     });
@@ -466,36 +292,28 @@ async function main() {
     server.listen(PROXY_PORT, () => {
         console.log('══════════════════════════════════════════════');
         console.log(`  Server: http://127.0.0.1:${PROXY_PORT}`);
-        console.log(`  Qwen Code baseUrl: http://127.0.0.1:${PROXY_PORT}/v1`);
-        console.log('');
-        console.log(`  Tools: ${TOOL_NAMES.join(', ')}`);
-        console.log('══════════════════════════════════════════════');
-        console.log('  Press Ctrl+C to stop\n');
+        console.log(`  API: http://127.0.0.1:${PROXY_PORT}/v1`);
+        console.log('══════════════════════════════════════════════\n');
     });
 
-    function gracefulShutdown(signal) {
-        console.log(`\n👋 ${signal} - shutting down...`);
-        session.dispose?.();
-        context.dispose?.();
-        model.dispose?.();
-        llama.dispose?.();
-        server.close(() => {
-            console.log('✅ Server closed');
-            process.exit(0);
-        });
-        setTimeout(() => process.exit(1), 5000);
-    }
+    const shutdown = (sig) => {
+        console.log(`\n👋 ${sig} - shutting down...`);
+        ctx?.dispose?.();
+        model?.dispose?.();
+        llama?.dispose?.();
+        server.close(() => process.exit(0));
+        setTimeout(() => process.exit(1), 3000);
+    };
 
-    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-    process.on('uncaughtException', (err) => {
-        console.error('❌ Uncaught exception:', err.message);
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('uncaughtException', err => {
+        console.error('❌ Uncaught:', err.message);
         process.exit(1);
     });
 }
 
 main().catch(err => {
     console.error('❌ Fatal:', err.message);
-    console.error(err.stack);
     process.exit(1);
 });
