@@ -23,8 +23,10 @@ set IDX=0
 
 for %%F in ("%MODEL_DIR%\*.gguf") do (
     set /a IDX+=1
-    for %%A in (%%~zF) do set /a SIZE_MB=%%A/1048576
-    echo   !IDX!^) %%~nF (!SIZE_MB!MB^)
+    set "FSIZE=%%~zF"
+    REM Convert bytes to GB using PowerShell (avoids batch overflow)
+    for /f "usebackq delims=" %%G in (`powershell -Command "[math]::Round(%%~zF/1GB,1)"`) do set SIZE_GB=%%G
+    echo   !IDX!^) %%~nF (!SIZE_GB!GB^)
 )
 
 if !IDX! equ 0 (
