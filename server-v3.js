@@ -6,11 +6,11 @@
 
 import { createServer } from 'http';
 import { exec } from 'child_process';
-import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'fs';
+import { readdirSync, statSync, existsSync } from 'fs';
 import { promisify } from 'util';
 import { join } from 'path';
 import readline from 'readline';
-import { getLlama } from 'node-llama-cpp';
+import { getLlama, LlamaChatSession, EmptyChatWrapper } from 'node-llama-cpp';
 
 const PROXY_PORT = 8888;
 const MODEL_DIR = 'C:\\Users\\rsbiiw\\Projects\\models';
@@ -140,6 +140,12 @@ async function main() {
     const seq = ctx.getSequence();
     const template = detectTemplate(sel.name);
 
+    // Use LlamaChatSession with EmptyChatWrapper - we pre-format the prompt ourselves
+    const session = new LlamaChatSession({
+        contextSequence: seq,
+        chatWrapper: new EmptyChatWrapper()
+    });
+
     console.log(`✅ Model loaded (GPU layers: ${model.gpuLayers})`);
     console.log(`   Chat template: ${template}`);
     console.log(`   Context: ${ctx.contextSize} tokens\n`);
@@ -193,7 +199,7 @@ async function main() {
 
                 // Non-streaming (default)
                 if (!stream) {
-                    const result = await seq.complete(prompt, {
+                    const text = await session.prompt(prompt, {
                         maxTokens: parsed.max_tokens ?? 2048,
                         temperature: parsed.temperature ?? 0.6,
                         topK: parsed.top_k ?? 40,
@@ -202,10 +208,8 @@ async function main() {
                         repeatPenalty: 1.1
                     });
 
-                    const text = typeof result === 'string' ? result : result?.text || '';
-                    const tokens = text.split(/\s+/).filter(Boolean).length;
-
-                    console.log(`✅ Response: ${text.substring(0, 100)}...\n`);
+                    const tokens = (typeof text === 'string' ? text : '').split(/\s+/).filter(Boolean).length;
+                    console.log(`✅ Response: ${(text || '').substring(0, 100)}...\n`);
 
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
@@ -215,7 +219,7 @@ async function main() {
                         model: sel.name,
                         choices: [{
                             index: 0,
-                            message: { role: 'assistant', content: text },
+                            message: { role: 'assistant', content: text || '' },
                             finish_reason: 'stop'
                         }],
                         usage: { prompt_tokens: 0, completion_tokens: tokens, total_tokens: tokens }
@@ -223,7 +227,8 @@ async function main() {
                     return;
                 }
 
-                // Streaming (SSE) - complete with onToken callback
+                // Streaming (SSE) - session.prompt returns the full text,
+                // but we need token-by-token. Use the onToken callback.
                 res.writeHead(200, {
                     'Content-Type': 'text/event-stream',
                     'Cache-Control': 'no-cache',
@@ -231,20 +236,16 @@ async function main() {
                     'Access-Control-Allow-Origin': '*'
                 });
 
-                let fullText = '';
                 let tokenCount = 0;
-
-                const result = await seq.complete(prompt, {
+                const text = await session.prompt(prompt, {
                     maxTokens: parsed.max_tokens ?? 2048,
                     temperature: parsed.temperature ?? 0.6,
                     topK: parsed.top_k ?? 40,
                     topP: parsed.top_p ?? 0.9,
                     stopSequences: stops,
                     repeatPenalty: 1.1,
-                    onToken: (tokens, ctx) => {
-                        // tokens is an array of token strings from the current generation step
+                    onToken: (tokens) => {
                         for (const t of tokens) {
-                            fullText += t;
                             tokenCount++;
                             const data = JSON.stringify({
                                 id: 'chatcmpl-' + Date.now(),
