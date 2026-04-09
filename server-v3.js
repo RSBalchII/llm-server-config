@@ -341,7 +341,6 @@ async function main() {
 
             try {
                 const parsed = JSON.parse(body);
-                parsed.stream = false; // Force non-streaming
                 const messages = parsed.messages || [];
                 const lastMsg = messages[messages.length - 1];
 
@@ -353,35 +352,80 @@ async function main() {
                     userMsg = lastMsg.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
                 }
 
-                console.log(`💬 Chat request: ${userMsg.substring(0, 120)}...`);
-
                 if (!userMsg) {
                     throw new Error('Empty prompt');
                 }
 
+                console.log(`💬 Chat request: ${userMsg.substring(0, 120)}...`);
+
+                // Always generate response
                 const response = await session.prompt(userMsg, {
                     maxTokens: 2048,
                     temperature: 0.7
                 });
 
-                // response is already a string from prompt()
                 const text = typeof response === 'string' ? response : response?.responseText || '';
-
                 console.log(`✅ Response: ${text.substring(0, 80)}...\n`);
 
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    id: 'chatcmpl-' + Date.now(),
-                    object: 'chat.completion',
-                    created: Math.floor(Date.now() / 1000),
-                    model: selectedModel.name,
-                    choices: [{
-                        index: 0,
-                        message: { role: 'assistant', content: text },
-                        finish_reason: 'stop'
-                    }],
-                    usage: { prompt_tokens: 0, completion_tokens: text.split(/\s+/).length, total_tokens: text.split(/\s+/).length }
-                }));
+                // If client requested streaming, send SSE
+                if (parsed.stream) {
+                    res.writeHead(200, {
+                        'Content-Type': 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                        'Connection': 'keep-alive',
+                        'Access-Control-Allow-Origin': '*'
+                    });
+
+                    // Send chunks (simulate streaming)
+                    const words = text.split(' ');
+                    const chunkSize = Math.max(1, Math.floor(words.length / 8));
+                    for (let i = 0; i < words.length; i += chunkSize) {
+                        const chunk = words.slice(i, i + chunkSize).join(' ');
+                        const data = JSON.stringify({
+                            id: 'chatcmpl-' + Date.now(),
+                            object: 'chat.completion.chunk',
+                            created: Math.floor(Date.now() / 1000),
+                            model: selectedModel.name,
+                            choices: [{
+                                index: 0,
+                                delta: { content: chunk },
+                                finish_reason: null
+                            }]
+                        });
+                        res.write(`data: ${data}\n\n`);
+                        await new Promise(r => setTimeout(r, 50));
+                    }
+
+                    // Final chunk with finish_reason
+                    res.write(`data: ${JSON.stringify({
+                        id: 'chatcmpl-' + Date.now(),
+                        object: 'chat.completion.chunk',
+                        created: Math.floor(Date.now() / 1000),
+                        model: selectedModel.name,
+                        choices: [{
+                            index: 0,
+                            delta: {},
+                            finish_reason: 'stop'
+                        }]
+                    })}\n\n`);
+                    res.write('data: [DONE]\n\n');
+                    res.end();
+                } else {
+                    // Non-streaming response
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        id: 'chatcmpl-' + Date.now(),
+                        object: 'chat.completion',
+                        created: Math.floor(Date.now() / 1000),
+                        model: selectedModel.name,
+                        choices: [{
+                            index: 0,
+                            message: { role: 'assistant', content: text },
+                            finish_reason: 'stop'
+                        }],
+                        usage: { prompt_tokens: 0, completion_tokens: text.split(/\s+/).length, total_tokens: text.split(/\s+/).length }
+                    }));
+                }
             } catch (err) {
                 console.error('❌ Chat error:', err.message);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
