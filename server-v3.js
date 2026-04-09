@@ -10,7 +10,13 @@ import { readdirSync, statSync, existsSync } from 'fs';
 import { promisify } from 'util';
 import { join } from 'path';
 import readline from 'readline';
-import { getLlama, LlamaChatSession, EmptyChatWrapper } from 'node-llama-cpp';
+import {
+    getLlama,
+    LlamaChatSession,
+    QwenChatWrapper,
+    GemmaChatWrapper,
+    AlpacaChatWrapper
+} from 'node-llama-cpp';
 
 const PROXY_PORT = 8888;
 const MODEL_DIR = 'C:\\Users\\rsbiiw\\Projects\\models';
@@ -32,13 +38,12 @@ function scanModels() {
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// ── Detect chat template from model name ─────────────────────────
-function detectTemplate(modelName) {
+// ── Detect chat wrapper from model name ──────────────────────────
+function detectWrapper(modelName) {
     const n = modelName.toLowerCase();
-    if (n.includes('qwen3') || n.includes('deepseek')) return 'qwen3';
-    if (n.includes('gemma')) return 'gemma';
-    if (n.includes('qwen')) return 'qwen';
-    return 'alpaca';
+    if (n.includes('qwen') || n.includes('deepseek') || n.includes('diffcoder')) return new QwenChatWrapper();
+    if (n.includes('gemma')) return new GemmaChatWrapper();
+    return new AlpacaChatWrapper();
 }
 
 // ── Format messages into model-specific chat template ────────────
@@ -138,16 +143,15 @@ async function main() {
     const model = await llama.loadModel({ modelPath: sel.path, gpuLayers });
     const ctx = await model.createContext({ contextSize: Math.min(16384, model.trainContextSize || 8192) });
     const seq = ctx.getSequence();
-    const template = detectTemplate(sel.name);
+    const wrapper = detectWrapper(sel.name);
 
-    // Use LlamaChatSession with EmptyChatWrapper - we pre-format the prompt ourselves
+    // LlamaChatSession with correct wrapper - manages history internally
     const session = new LlamaChatSession({
         contextSequence: seq,
-        chatWrapper: new EmptyChatWrapper()
+        chatWrapper: wrapper
     });
 
     console.log(`✅ Model loaded (GPU layers: ${model.gpuLayers})`);
-    console.log(`   Chat template: ${template}`);
     console.log(`   Context: ${ctx.contextSize} tokens\n`);
 
     const server = createServer(async (req, res) => {
@@ -191,20 +195,43 @@ async function main() {
                 const messages = parsed.messages || [];
                 if (!messages.length) throw new Error('Empty messages array');
 
-                const prompt = formatPrompt(messages, template);
-                const stops = stopTokens(template);
                 const stream = parsed.stream || false;
 
-                console.log(`💬 Chat request (${messages.length} messages, template: ${template})`);
+                console.log(`💬 Chat request (${messages.length} messages)`);
+
+                // Set system prompt from first message if it's a system message
+                const systemMsg = messages.find(m => m.role === 'system');
+                if (systemMsg && typeof systemMsg.content === 'string') {
+                    session.systemPrompt = systemMsg.content;
+                }
+
+                // Build conversation history for the session
+                // LlamaChatSession expects us to call prompt() with user messages
+                // and it manages history internally
+                const lastUser = messages.filter(m => m.role !== 'system').pop();
+                const userMsg = typeof lastUser?.content === 'string'
+                    ? lastUser.content
+                    : lastUser?.content?.filter(c => c.type === 'text').map(c => c.text).join('\n') || '';
+
+                if (!userMsg) throw new Error('No user message found');
+
+                // Feed previous assistant messages into session history
+                for (const msg of messages) {
+                    if (msg.role === 'system') continue;
+                    if (msg.role === 'assistant' && typeof msg.content === 'string') {
+                        session._chatHistory.push({ role: 'assistant', message: msg.content });
+                    } else if (msg.role === 'user' && typeof msg.content === 'string' && msg !== lastUser) {
+                        session._chatHistory.push({ role: 'user', message: msg.content });
+                    }
+                }
 
                 // Non-streaming (default)
                 if (!stream) {
-                    const text = await session.prompt(prompt, {
+                    const text = await session.prompt(userMsg, {
                         maxTokens: parsed.max_tokens ?? 2048,
                         temperature: parsed.temperature ?? 0.6,
                         topK: parsed.top_k ?? 40,
                         topP: parsed.top_p ?? 0.9,
-                        stopSequences: stops,
                         repeatPenalty: 1.1
                     });
 
@@ -227,8 +254,7 @@ async function main() {
                     return;
                 }
 
-                // Streaming (SSE) - session.prompt returns the full text,
-                // but we need token-by-token. Use the onToken callback.
+                // Streaming (SSE)
                 res.writeHead(200, {
                     'Content-Type': 'text/event-stream',
                     'Cache-Control': 'no-cache',
@@ -237,12 +263,11 @@ async function main() {
                 });
 
                 let tokenCount = 0;
-                const text = await session.prompt(prompt, {
+                const text = await session.prompt(userMsg, {
                     maxTokens: parsed.max_tokens ?? 2048,
                     temperature: parsed.temperature ?? 0.6,
                     topK: parsed.top_k ?? 40,
                     topP: parsed.top_p ?? 0.9,
-                    stopSequences: stops,
                     repeatPenalty: 1.1,
                     onToken: (tokens) => {
                         for (const t of tokens) {
