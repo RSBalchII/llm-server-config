@@ -299,7 +299,7 @@ async function main() {
     const session = new LlamaChatSession({
         contextSequence: sequence,
         chatWrapper: chatWrapper,
-        systemPrompt: 'You are a helpful coding assistant. Use tools when appropriate.',
+        systemPrompt: `You are a helpful AI coding assistant. Respond clearly and concisely. Use proper formatting in your responses. Always use complete sentences and proper spacing between words.`,
         modelFunctions: TOOL_NAMES.map(name => ({
             name,
             ...TOOLS[name]
@@ -378,13 +378,18 @@ async function main() {
                 // Always generate response
                 const response = await session.prompt(userMsg, {
                     maxTokens: 2048,
-                    temperature: 0.7
+                    temperature: 0.2,
+                    topK: 40,
+                    topP: 0.9,
+                    repeatPenalty: 1.1,
+                    repeatPenaltyLastTokens: 64
                 });
 
                 clearTimeout(timeout);
 
                 const text = typeof response === 'string' ? response : response?.responseText || '';
-                console.log(`✅ Response: ${text.substring(0, 80)}...\n`);
+                console.log(`✅ Response: ${text.substring(0, 120)}...`);
+                console.log(`   [Raw type: ${typeof response}, keys: ${typeof response === 'object' ? Object.keys(response).join(',') : 'N/A'}]`);
 
                 // If client requested streaming, send SSE
                 if (parsed.stream) {
