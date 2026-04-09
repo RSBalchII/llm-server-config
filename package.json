@@ -3,11 +3,10 @@
   "version": "0.3.0",
   "description": "Minimal AI agent with node-llama-cpp",
   "type": "module",
-  "main": "server.js",
+  "main": "server-v3.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "agent": "node agent-v2.js"
+    "start": "node server-v3.js",
+    "dev": "node --watch server-v3.js"
   },
   "keywords": ["ai", "agent", "llm", "llama-cpp"],
   "license": "MIT",

@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] - 2026-04-09
+
+### Changed
+- **Complete rewrite of server-v3.js**
+  - Removed `LlamaChatSession` and chat wrapper dependencies
+  - Use `sequence.complete()` with model-specific chat templates
+  - Supports Qwen/Qwen3, Gemma, Alpaca templates (auto-detected)
+  - Streaming via `onToken` callback (real token-by-token SSE)
+  - Proper `stopSequences` per template
+  - Clean OpenAI-compatible JSON output
+- **package.json**: Default entry is `server-v3.js`
+- **start.bat**: Fixed file size overflow (PowerShell instead of batch math)
+- **start.bat**: Shows VRAM estimate for large models
+
+### Removed
+- 50+ dead files (test scripts, old servers, analysis docs)
+- Dead directories (llama.cpp, scheduler, voice, tools, test-results)
+- No more `server.js` proxy to external llama-server binary
+
+### Technical
+- No more garbled output - raw completions instead of wrapped sessions
+- Context size auto-detection from `model.trainContextSize`
+- VRAM warnings for models exceeding 16GB GPU memory
+
 ## [0.2.0] - 2026-04-08
 
 ### Added
