@@ -1,116 +1,106 @@
 @echo off
-REM micro-nanobot - Windows Starter
-REM Usage: start.bat
+REM micro-nanobot Server Launcher
+REM Starts llama-server + proxy server
 
 setlocal enabledelayedexpansion
 
-set MODELS_DIR=%~dp0..\models
-set LLAMA_SERVER=%~dp0llama.cpp\build\bin\Release\llama-server.exe
-set PORT=8080
+set LLAMA_PORT=8081
+set PROXY_PORT=8080
+set SCRIPT_DIR=%~dp0
 
 echo.
 echo ========================================
-echo   micro-nanobot Model Manager
+echo   micro-nanobot Server
 echo ========================================
 echo.
 
-REM Check if llama-server exists
+REM ============================================================================
+REM FIND LLAMA-SERVER
+REM ============================================================================
+echo Searching for llama-server...
+set "LLAMA_SERVER=C:\Users\rsbiiw\llama.cpp\build\bin\Release\llama-server.exe"
+
 if not exist "%LLAMA_SERVER%" (
-    echo ERROR: llama-server not found at:
-    echo   %LLAMA_SERVER%
-    echo.
-    echo Please build llama.cpp first:
-    echo   cd llama.cpp
-    echo   cmake -B build -DCMAKE_BUILD_TYPE=Release
-    echo   cmake --build build --config Release
+    echo ERROR: llama-server not found at %LLAMA_SERVER%
     pause
     exit /b 1
 )
+echo Found: %LLAMA_SERVER%
+echo.
 
-REM Scan for models
+REM ============================================================================
+REM FIND MODELS  
+REM ============================================================================
 echo Scanning for models...
 echo.
 
 set model_count=0
-for %%f in ("%MODELS_DIR%\*.gguf") do (
-    set /a model_count+=1
-    set "model_!model_count!=%%f"
-    set "model_name_!model_count!=%%~nf"
+set "seen_names="
+
+REM Use single model dir to avoid duplicates
+for %%f in ("%USERPROFILE%\Projects\models\*.gguf") do (
+    set "fname=%%~nf"
+    echo !seen_names! | findstr /C:"!fname!" >nul
+    if errorlevel 1 (
+        set "seen_names=!seen_names! !fname!"
+        set /a model_count+=1
+        set "model_!model_count!=%%~ff"
+        set "model_name_!model_count!=%%~nf"
+    )
 )
 
 if %model_count%==0 (
-    echo   No models found in %MODELS_DIR%
-    echo.
-    echo   Place GGUF files in %MODELS_DIR%
-    echo   or run download-model.sh
+    echo   No models found
     pause
     exit /b 1
 )
 
-REM Show menu
 echo Available models:
 echo.
 for /l %%i in (1,1,%model_count%) do (
-    set "name=!model_name_%%i!"
-    set "path=!model_%%i!"
-    for %%A in ("!path!") do set "size=%%~zA"
-    echo   %%i^) !name!
-    echo       Size: !size! bytes
-    echo       Path: !path!
+    echo   %%i^) !model_name_%%i!
+    echo       Path: !model_%%i!
     echo.
 )
 
-echo   d^) Download new model
 echo   0^) Cancel
 echo.
 set /p choice="Select model (number): "
 
-if /i "%choice%"=="d" (
-    echo Download not available on Windows - download manually
-    pause
-    exit /b 1
-)
-
-if "%choice%"=="0" (
-    echo Cancelled
-    exit /b 0
-)
-
+if "%choice%"=="0" exit /b 0
 if %choice% lss 1 if %choice% gtr %model_count% (
-    echo Invalid choice
-    pause
-    exit /b 1
+    echo Invalid choice & pause & exit /b 1
 )
 
-REM Get selected model
-set "selected_model=!model_%choice%!"
-set "selected_name=!model_name_%choice%!"
+set "SELECTED_MODEL=!model_%choice%!"
+set "SELECTED_NAME=!model_name_%choice%!"
+
+for %%I in ("%LLAMA_SERVER%") do set LLAMA_DIR=%%~dI%%~pI
 
 echo.
 echo ========================================
 echo   Starting micro-nanobot
 echo ========================================
-echo   Model: %selected_name%
-echo   Port: http://127.0.0.1:%PORT%
+echo   Model: !SELECTED_NAME!
+echo   Proxy: http://127.0.0.1:!PROXY_PORT!
+echo   Llama: http://127.0.0.1:!LLAMA_PORT!
 echo ========================================
 echo.
 
 REM Start llama-server in background
-echo Starting llama.cpp server...
-start /B "%LLAMA_SERVER%" -m "%selected_model%" --port %PORT% --ctx-size 32768
-set SERVER_PID=%ERRORLEVEL%
+echo 🚀 Starting llama-server...
+set "LLAMA_DIR=C:\Users\rsbiiw\llama.cpp\build\bin\Release"
+start /B "llama-server" /D "%LLAMA_DIR%" "%LLAMA_SERVER%" -m "%SELECTED_MODEL%" --port %LLAMA_PORT% --ctx-size 40960 --threads 4 --gpu-layers 99
 
-echo Waiting for server...
-timeout /t 5 /nobreak >nul
+REM Wait for llama-server
+echo ⏳ Waiting for llama-server...
+%windir%\System32\timeout.exe /t 15 /nobreak >nul
 
 echo.
-echo Starting agent...
+echo 🤖 Starting proxy server...
+echo   Model env: !SELECTED_NAME!
 echo.
 
-REM Start agent
-node agent.js
-
-REM Cleanup on exit
-echo.
-echo Stopping server...
-taskkill /F /FI "WINDOWTITLE eq llama-server*" >nul 2>&1
+REM Pass model name via env var to node
+set MODEL_NAME=!SELECTED_NAME!
+start /B "" cmd /c ""%ProgramFiles%\nodejs\node.exe" "%~dp0server.js""
