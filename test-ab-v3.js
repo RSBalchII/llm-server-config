@@ -77,7 +77,7 @@ async function testModel(modelConfig) {
 
         console.log('   ⏳ Creating context...');
         const context = await model.createContext({
-            contextSize: 16384
+            contextSize: Math.min(16384, model.trainContextSize || 16384)
         });
         const sequence = context.getSequence();
         console.log('   ✅ Context created');

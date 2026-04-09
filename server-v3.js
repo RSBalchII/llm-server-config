@@ -200,7 +200,7 @@ function scanModels() {
 // ── Auto-detect chat wrapper ────────────────────────────────────
 function detectChatWrapper(modelName) {
     const lower = modelName.toLowerCase();
-    if (lower.includes('qwen')) return new QwenChatWrapper();
+    if (lower.includes('qwen') || lower.includes('diffcoder') || lower.includes('deepseek')) return new QwenChatWrapper();
     if (lower.includes('gemma')) return new GemmaChatWrapper();
     return new GeneralChatWrapper();
 }
@@ -276,7 +276,8 @@ async function main() {
     });
 
     const context = await model.createContext({
-        contextSize: 16384
+        // Respect model's training context limit
+        contextSize: Math.min(16384, model.trainContextSize || 16384)
     });
 
     // Get the default sequence
