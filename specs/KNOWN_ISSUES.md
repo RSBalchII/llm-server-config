@@ -2,6 +2,31 @@
 
 ## Resolved
 
+### ✅ Streaming Response Support (Qwen Code Compatibility)
+**Symptom:** Qwen Code showed `[API Error: Model stream ended without a finish reason]`  
+**Root Cause:** Qwen Code expects SSE streaming responses, not plain JSON  
+**Fix:**
+- Detect `stream: true` in request
+- Split generated response into chunks with `finish_reason: 'stop'` in final chunk
+- Send SSE format: `data: {...}\n\n` per chunk, ending with `data: [DONE]\n\n`
+- Also supports non-streaming for clients that don't request streaming
+
+**Date:** 2026-04-09
+
+### ✅ Multimodal Message Content
+**Symptom:** `userMsg.substring is not a function` error  
+**Root Cause:** Qwen Code sends `content` as array `[{type: "text", text: "..."}]`, not string  
+**Fix:** Check content type, extract text from array items
+
+**Date:** 2026-04-09
+
+### ✅ Context Size Too Small
+**Symptom:** "Failed to compress chat history for context shift"  
+**Root Cause:** 8192 tokens too small for Qwen Code's system prompts + conversation  
+**Fix:** Increased to 16384 tokens
+
+**Date:** 2026-04-09
+
 ### ✅ Model Name Validation (llama.cpp HTTP 400)
 **Symptom:** `model 'name' not found` errors on all chat completions  
 **Root Cause:** llama.cpp validates model name against loaded model. Empty model name from `start.bat` (`-m ""`) caused all requests to fail.  
