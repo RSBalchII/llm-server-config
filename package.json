@@ -1,18 +1,17 @@
 {
   "name": "micro-nanobot",
-  "version": "0.1.0",
-  "description": "Minimal AI agent harness with voice support - llama.cpp wrapper",
+  "version": "0.3.0",
+  "description": "Minimal AI agent with node-llama-cpp",
   "type": "module",
-  "main": "agent.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node agent.js",
-    "dev": "node --watch agent.js",
-    "install-voice": "./voice/install.sh"
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "agent": "node agent-v2.js"
   },
-  "keywords": ["ai", "agent", "llm", "minimal", "voice", "llama-cpp"],
+  "keywords": ["ai", "agent", "llm", "llama-cpp"],
   "license": "MIT",
-  "dependencies": {},
-  "optionalDependencies": {
-    "sherpa-onnx-node": "*"
+  "dependencies": {
+    "node-llama-cpp": "latest"
   }
 }
