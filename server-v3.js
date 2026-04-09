@@ -247,10 +247,15 @@ async function main() {
     }
 
     const selectedModel = models[choice - 1];
+    // Show VRAM info
+    const sizeGB = parseFloat(selectedModel.sizeGB);
+    const estimatedLayers = Math.min(Math.floor(16 / (sizeGB / 41)), 41); // rough: 16GB / (size/total_layers)
     console.log(`\n📦 Model: ${selectedModel.name}`);
+    console.log(`   Size: ${selectedModel.sizeGB}GB, ~41 layers total`);
+    console.log(`   Estimated max GPU layers on 16GB VRAM: ~${estimatedLayers}`);
 
     // GPU layers selection
-    const gpuAnswer = await ask('GPU layers (number, "auto", or "max", default: auto): ');
+    const gpuAnswer = await ask(`GPU layers (number, "auto", or "max", default: auto): `);
 
     let gpuLayers;
     if (gpuAnswer.toLowerCase() === 'auto' || gpuAnswer === '') {
@@ -262,6 +267,12 @@ async function main() {
         if (isNaN(gpuLayers)) {
             console.log('Invalid number, using auto');
             gpuLayers = 'auto';
+        } else {
+            // Warning for large models on small VRAM
+            if (sizeGB > 8 && gpuLayers > 33) {
+                console.log(`⚠️  Warning: ${selectedModel.name} (${sizeGB}GB) may not fit with ${gpuLayers} GPU layers`);
+                console.log(`   Expected ~${(sizeGB * 0.4).toFixed(0)}GB VRAM for ${gpuLayers} layers`);
+            }
         }
     }
 
@@ -359,11 +370,18 @@ async function main() {
 
                 console.log(`💬 Chat request: ${userMsg.substring(0, 120)}...`);
 
+                // Timeout for large models (5 min)
+                const timeout = setTimeout(() => {
+                    console.error('⏰ Chat request timed out (5 min limit)');
+                }, 300000);
+
                 // Always generate response
                 const response = await session.prompt(userMsg, {
                     maxTokens: 2048,
                     temperature: 0.7
                 });
+
+                clearTimeout(timeout);
 
                 const text = typeof response === 'string' ? response : response?.responseText || '';
                 console.log(`✅ Response: ${text.substring(0, 80)}...\n`);
