@@ -13,6 +13,7 @@ import { loadSkills } from './skills/loader.js';
 import { parseSchedule } from './scheduler/parser.js';
 import { addSchedule, listSchedules, removeSchedule, toggleSchedule, formatSchedule } from './scheduler/manager.js';
 import VoiceManager from './voice/manager.js';
+import { extractToolCalls, executeModelToolCalls } from './tools/model-trigger.js';
 
 const execAsync = promisify(exec);
 
@@ -22,22 +23,25 @@ const execAsync = promisify(exec);
 
 const DEFAULT_CONFIG = {
   llmUrl: 'http://127.0.0.1:8080',
-  model: 'qwen-3.5-2b',
+  model: 'qwen-3.5-4b-heretic',
   maxContext: 10,
-  systemPrompt: `COMMAND MODE ONLY. Output ONLY the shell command. NO words before or after.
+  systemPrompt: `You are a local coding agent.
 
+When asked to do something:
+- Output ONLY the shell command
+- No explanations
+- No thinking tags
+
+Examples:
 User: list files
 Assistant: ls -la
 
-User: show date
-Assistant: date
-
-User: current directory
+User: what directory are we in
 Assistant: pwd
 
-User: ${new Date().toLocaleTimeString()}
-Assistant:`,
-  temperature: 0.01,  // Nearly deterministic
+User: hi
+Assistant: Hello! How can I help?`,
+  temperature: 0.4,
 };
 
 function loadConfig() {
@@ -55,7 +59,35 @@ const config = loadConfig();
 // LLM CLIENT (llama.cpp HTTP API)
 // ============================================================================
 
-async function callLLM(messages) {
+function extractThinkingAndResponse(content) { let response = content.trim(); let thinking = ''; const thinkClose = '<' + '/' + 'think' + '>'; const openIdx = content.indexOf(''); const closeIdx = content.indexOf(thinkClose); if (openIdx !== -1) { if (closeIdx !== -1 && closeIdx > openIdx) { thinking = content.slice(openIdx + 9, closeIdx).trim(); response = content.slice(closeIdx + 8).trim(); } else { const textAfterOpen = content.slice(openIdx + 9); const lines = textAfterOpen.split('\n').filter(l => l.trim()); const lastLine = (lines[lines.length - 1] || '').trim(); if (lastLine.length < 50 && !lastLine.startsWith('Okay') && !lastLine.startsWith('The user')) { thinking = textAfterOpen.slice(0, -lastLine.length).trim(); response = lastLine; } else { thinking = textAfterOpen.trim(); response = ''; } } return { thinking, response }; } return { thinking, response }; }
+
+function extractCommandFromResponse(content) {
+  // Search the ENTIRE response (including thinking) for command patterns
+  // This catches commands mentioned anywhere in the text
+  
+  // Common command patterns
+  const commandPatterns = [
+    // Direct: "the command is: ls -la"
+    /(?:command|run|execute|use)\s*(?:is|:)?\s*[`'"]?([a-z][a-z0-9\s\-\/\.\*]+)[`'"]?$/im,
+    // Backticks: `ls -la`
+    /`([a-z][a-z0-9\s\-\/\.\*]+)`/im,
+    // Code block
+    /```(?:bash|sh)?\s*\n([a-z][a-z0-9\s\-\/\.\*]+)\n```/im,
+    // "I should run: ls -la"
+    /(?:run|execute|use)\s*:?`\s*([a-z][a-z0-9\s\-\/\.\*]+)\s*`/im,
+  ];
+  
+  for (const pattern of commandPatterns) {
+    const match = content.match(pattern);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+  
+  return null;
+}
+
+async function callLLM(messages, options = {}) {
   try {
     const response = await fetch(`${config.llmUrl}/v1/chat/completions`, {
       method: 'POST',
@@ -66,7 +98,7 @@ async function callLLM(messages) {
           ...messages
         ],
         stream: false,
-        max_tokens: 256,
+        max_tokens: options.maxTokens || 1024,
         temperature: config.temperature || 0.1,
       }),
     });
@@ -76,7 +108,20 @@ async function callLLM(messages) {
     }
 
     const data = await response.json();
-    return data.choices[0].message.content;
+    
+    // Handle reasoning models that output to reasoning_content
+    const reasoningContent = data.choices[0].message.reasoning_content || '';
+    const rawContent = data.choices[0].message.content || '';
+    
+    // Extract thinking from content if present
+    const { thinking, response: cleanContent } = extractThinkingAndResponse(rawContent);
+    
+    // Return both the extracted thinking and clean response
+    return { 
+      reasoning: reasoningContent || thinking,  // Use extracted thinking if no reasoning_content
+      content: cleanContent,
+      full: (reasoningContent || thinking) + '\n' + cleanContent
+    };
   } catch (error) {
     throw new Error(`LLM call failed: ${error.message}`);
   }
@@ -91,9 +136,67 @@ const SKILL_PATTERNS = loadSkills();
 
 // Fallback patterns (if skills don't cover something)
 const FALLBACK_PATTERNS = [
-  // Create file without "file" keyword
+  // Code operations
+  { pattern: /\b(run|execute)\s+(tests?|test)\b/i,
+    handler: () => {
+      if (existsSync('package.json')) return 'npm test';
+      if (existsSync('pytest.ini') || existsSync('setup.py')) return 'pytest';
+      if (existsSync('Cargo.toml')) return 'cargo test';
+      if (existsSync('Makefile')) return 'make test';
+      return 'echo "No test runner found"';
+    }
+  },
+  { pattern: /\b(run|execute|start)\s+(the\s+)?(server|app|application)\b/i,
+    handler: () => {
+      if (existsSync('package.json')) return 'npm start';
+      if (existsSync('Cargo.toml')) return 'cargo run';
+      if (existsSync('Makefile')) return 'make run';
+      return 'echo "No start command found"';
+    }
+  },
+  { pattern: /\b(build|compile)\b/i,
+    handler: () => {
+      if (existsSync('package.json')) return 'npm run build';
+      if (existsSync('Cargo.toml')) return 'cargo build';
+      if (existsSync('Makefile')) return 'make';
+      return 'echo "No build command found"';
+    }
+  },
+
+  // Search operations
+  { pattern: /\b(search|find|grep)\s+(for\s+)?"(.+)"\s+(in\s+)?(.+)?/i,
+    handler: (m) => `grep -rn "${m[3]}" ${m[5] || '.'}`
+  },
+  { pattern: /\b(where|which)\s+(is|are)\s+(\S+)/i,
+    handler: (m) => `find . -name "*${m[3]}*" -type f`
+  },
+
+  // File operations
   { pattern: /\b(create|make)\s+(\S+)\s+with\s+(.+)\s*$/i,
-    handler: (m) => `echo "${m[2]}" > ${m[3]}` },
+    handler: (m) => `echo "${m[2]}" > ${m[3]}`
+  },
+  
+  // Advanced file operations
+  { pattern: /\b(append|add)\s+(.+?)\s+to\s+(.+)\s*$/i,
+    handler: (m) => JSON.stringify({ type: 'append_file', path: m[3], content: m[2] })
+  },
+  { pattern: /\b(prepend|add to top of)\s+(.+?)\s+to\s+(.+)\s*$/i,
+    handler: (m) => JSON.stringify({ type: 'prepend_file', path: m[3], content: m[2] })
+  },
+  { pattern: /\b(replace|substitute)\s+(.+?)\s+with\s+(.+?)\s+in\s+(.+)\s*$/i,
+    handler: (m) => JSON.stringify({ type: 'replace_in_file', path: m[4], search: m[2], replace: m[3] })
+  },
+  { pattern: /\b(move|rename)\s+(\S+\.\S+|\S+\/\S+)\s+to\s+(\S+)\s*$/i,
+    handler: (m) => JSON.stringify({ type: 'move_file', source: m[2], dest: m[3] })
+  },
+  { pattern: /\b(copy|duplicate)\s+(\S+\.\S+|\S+\/\S+)\s+to\s+(\S+)\s*$/i,
+    handler: (m) => JSON.stringify({ type: 'copy_file', source: m[2], dest: m[3] })
+  },
+
+  // Git operations
+  { pattern: /\b(git)\s+(status|st|log|diff|branch|pull|push|add|commit|fetch)\b/i,
+    handler: (m) => `git ${m[2]}`
+  },
 ];
 
 // Filter out any null patterns from skills
@@ -106,9 +209,18 @@ function extractIntent(userText) {
   for (const intent of INTENT_PATTERNS) {
     const match = userText.match(intent.pattern);
     if (match) {
-      const command = intent.handler(match);
-      if (command) {
-        return { type: 'bash', command, confidence: 'high' };
+      const result = intent.handler(match);
+      if (result) {
+        // Check if it's a JSON tool call or a bash command
+        if (result.startsWith('{')) {
+          try {
+            const toolCall = JSON.parse(result);
+            return { type: toolCall.type, ...toolCall, confidence: 'high' };
+          } catch (e) {
+            // Not valid JSON, treat as bash command
+          }
+        }
+        return { type: 'bash', command: result, confidence: 'high' };
       }
     }
   }
@@ -119,6 +231,37 @@ function extractIntent(userText) {
     return { type: 'bash', command: trimmed, confidence: 'medium' };
   }
 
+  return null;
+}
+
+// ============================================================================
+// CODE INTENT DETECTION - Smart code-aware parsing
+// ============================================================================
+
+function extractCodeIntent(userText) {
+  const text = userText.toLowerCase();
+  
+  // Test execution
+  if (/\b(run|execute)\s+(tests?|testing)\b/.test(text) || 
+      /\btest\s+(the\s+)?(code|project|app)\b/.test(text)) {
+    return { type: 'run_tests' };
+  }
+  
+  // Build
+  if (/\b(build|compile|make)\b/.test(text) && !/\b(search|find)\b/.test(text)) {
+    return { type: 'build' };
+  }
+  
+  // Code search
+  const searchMatch = text.match(/\b(search|find|grep)\s+(for\s+)?["']?(.+?)["']?\s*(in\s+(\S+))?$/i);
+  if (searchMatch) {
+    return { 
+      type: 'code_search', 
+      query: searchMatch[3],
+      directory: searchMatch[5] || '.' 
+    };
+  }
+  
   return null;
 }
 
@@ -213,17 +356,19 @@ async function confirmDangerousCommand(command, rule) {
   return answer === 'CONFIRM';
 }
 
-async function toolBash(command) {
+async function toolBash(command, options = {}) {
   try {
+    const cwd = options.cwd || process.cwd();
     const { stdout, stderr } = await execAsync(command, {
       timeout: 30000,
-      maxBuffer: 1024 * 1024
+      maxBuffer: 1024 * 1024,
+      cwd: cwd
     });
     return { success: true, output: stdout || stderr };
   } catch (error) {
     return {
       success: false,
-      output: error.message || stderr
+      output: error.message
     };
   }
 }
@@ -251,7 +396,148 @@ async function toolWriteFile(filepath, content) {
   }
 }
 
-async function executeTool(toolCall, skipSafetyCheck = false) {
+async function toolAppendFile(filepath, content) {
+  try {
+    const absPath = filepath.startsWith('/') ? filepath : `${process.cwd()}/${filepath}`;
+    appendFileSync(absPath, content);
+    return { success: true, output: `Appended to: ${filepath}` };
+  } catch (error) {
+    return { success: false, output: error.message };
+  }
+}
+
+async function toolPrependFile(filepath, content) {
+  try {
+    const absPath = filepath.startsWith('/') ? filepath : `${process.cwd()}/${filepath}`;
+    const existing = existsSync(absPath) ? readFileSync(absPath, 'utf-8') : '';
+    writeFileSync(absPath, content + '\n' + existing);
+    return { success: true, output: `Prepended to: ${filepath}` };
+  } catch (error) {
+    return { success: false, output: error.message };
+  }
+}
+
+async function toolReplaceInFile(filepath, search, replace) {
+  try {
+    if (!filepath || !search || replace === undefined) {
+      return { success: false, output: 'Missing parameters. Example: replace "old" with "new" in file.txt' };
+    }
+    const absPath = filepath.startsWith('/') ? filepath : `${process.cwd()}/${filepath}`;
+    if (!existsSync(absPath)) {
+      return { success: false, output: `File not found: ${filepath}` };
+    }
+    let content = readFileSync(absPath, 'utf-8');
+    const count = (content.match(new RegExp(search, 'g')) || []).length;
+    content = content.split(search).join(replace);
+    writeFileSync(absPath, content);
+    return { success: true, output: `Replaced ${count} occurrence(s) in ${filepath}` };
+  } catch (error) {
+    return { success: false, output: error.message };
+  }
+}
+
+async function toolMoveFile(source, dest) {
+  try {
+    if (!source || !dest) {
+      return { success: false, output: 'Missing source or destination. Example: move file.txt to new.txt' };
+    }
+    const absSource = source.startsWith('/') ? source : `${process.cwd()}/${source}`;
+    const absDest = dest.startsWith('/') ? dest : `${process.cwd()}/${dest}`;
+    
+    if (!existsSync(absSource)) {
+      return { success: false, output: `Source not found: ${source}` };
+    }
+    
+    // Use rename for moving within same filesystem
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+    
+    // On Windows, use move; on Unix, use mv
+    const isWindows = process.platform === 'win32';
+    const cmd = isWindows ? `move "${absSource}" "${absDest}"` : `mv "${absSource}" "${absDest}"`;
+    
+    await execAsync(cmd);
+    return { success: true, output: `Moved: ${source} → ${dest}` };
+  } catch (error) {
+    return { success: false, output: error.message };
+  }
+}
+
+async function toolCopyFile(source, dest) {
+  try {
+    if (!source || !dest) {
+      return { success: false, output: 'Missing source or destination. Example: copy file.txt to backup.txt' };
+    }
+    const absSource = source.startsWith('/') ? source : `${process.cwd()}/${source}`;
+    const absDest = dest.startsWith('/') ? dest : `${process.cwd()}/${dest}`;
+    
+    if (!existsSync(absSource)) {
+      return { success: false, output: `Source not found: ${source}` };
+    }
+    
+    const content = readFileSync(absSource);
+    writeFileSync(absDest, content);
+    return { success: true, output: `Copied: ${source} → ${dest}` };
+  } catch (error) {
+    return { success: false, output: error.message };
+  }
+}
+
+async function toolCodeSearch(query, directory = '.') {
+  try {
+    const { stdout } = await execAsync(`grep -rn "${query}" ${directory} --include="*.js" --include="*.ts" --include="*.py" --include="*.rs" --include="*.json" --include="*.md" | head -50`, {
+      timeout: 10000,
+      maxBuffer: 1024 * 512
+    });
+    return { success: true, output: stdout || 'No matches found' };
+  } catch (error) {
+    return { success: false, output: error.message };
+  }
+}
+
+async function toolRunTests() {
+  try {
+    // Detect test framework
+    if (existsSync('package.json')) {
+      const { stdout } = await execAsync('npm test', { timeout: 60000, maxBuffer: 1024 * 1024 });
+      return { success: true, output: stdout };
+    }
+    if (existsSync('pytest.ini') || existsSync('setup.py') || existsSync('pyproject.toml')) {
+      const { stdout } = await execAsync('pytest', { timeout: 60000, maxBuffer: 1024 * 1024 });
+      return { success: true, output: stdout };
+    }
+    if (existsSync('Cargo.toml')) {
+      const { stdout } = await execAsync('cargo test', { timeout: 120000, maxBuffer: 1024 * 1024 });
+      return { success: true, output: stdout };
+    }
+    return { success: false, output: 'No test framework detected' };
+  } catch (error) {
+    return { success: false, output: error.stderr || error.message };
+  }
+}
+
+async function toolBuild() {
+  try {
+    if (existsSync('package.json')) {
+      const { stdout, stderr } = await execAsync('npm run build', { timeout: 120000, maxBuffer: 1024 * 1024 });
+      return { success: true, output: stdout || stderr };
+    }
+    if (existsSync('Cargo.toml')) {
+      const { stdout, stderr } = await execAsync('cargo build', { timeout: 300000, maxBuffer: 1024 * 1024 });
+      return { success: true, output: stdout || stderr };
+    }
+    if (existsSync('Makefile')) {
+      const { stdout, stderr } = await execAsync('make', { timeout: 300000, maxBuffer: 1024 * 1024 });
+      return { success: true, output: stdout || stderr };
+    }
+    return { success: false, output: 'No build system detected' };
+  } catch (error) {
+    return { success: false, output: error.stderr || error.message };
+  }
+}
+
+async function executeTool(toolCall, skipSafetyCheck = false, options = {}) {
   console.log(`\n🔧 [${toolCall.type}]`);
 
   // Safety check for bash commands
@@ -267,14 +553,119 @@ async function executeTool(toolCall, skipSafetyCheck = false) {
 
   switch (toolCall.type) {
     case 'bash':
-      return await toolBash(toolCall.command);
+      // Handle cd commands specially - update working directory
+      if (toolCall.command.startsWith('cd ')) {
+        const targetDir = toolCall.command.slice(3).trim();
+        const { resolve } = await import('path');
+        const { existsSync, statSync } = await import('fs');
+        
+        const newDir = resolve(options.cwd || process.cwd(), targetDir);
+        if (existsSync(newDir) && statSync(newDir).isDirectory()) {
+          options.cwd = newDir;
+          return { success: true, output: newDir };
+        } else {
+          return { success: false, output: `Directory not found: ${newDir}` };
+        }
+      }
+      return await toolBash(toolCall.command, { cwd: options.cwd });
     case 'read_file':
       return await toolReadFile(toolCall.path);
     case 'write_file':
       return await toolWriteFile(toolCall.path, toolCall.content);
+    case 'append_file':
+      return await toolAppendFile(toolCall.path, toolCall.content);
+    case 'prepend_file':
+      return await toolPrependFile(toolCall.path, toolCall.content);
+    case 'replace_in_file':
+      return await toolReplaceInFile(toolCall.path, toolCall.search, toolCall.replace);
+    case 'move_file':
+      return await toolMoveFile(toolCall.source, toolCall.dest);
+    case 'copy_file':
+      return await toolCopyFile(toolCall.source, toolCall.dest);
+    case 'code_search':
+      return await toolCodeSearch(toolCall.query, toolCall.directory);
+    case 'run_tests':
+      return await toolRunTests();
+    case 'build':
+      return await toolBuild();
     default:
       return { success: false, output: 'Unknown tool type' };
   }
+}
+
+// ============================================================================
+// Unix→Windows Command Translation
+// ============================================================================
+
+function translateToWindows(command) {
+  const isWindows = process.platform === 'win32';
+  if (!isWindows) return command;
+  
+  // Exact command translations
+  const exactMap = {
+    'pwd': 'cd',
+    'ls': 'dir',
+    'ls -la': 'dir',
+    'ls -l': 'dir',
+    'ls -a': 'dir /a',
+    'll': 'dir',
+    'cat': 'type',
+    'head': 'more',
+    'tail': 'more',
+    'grep': 'findstr',
+    'find .': 'dir /s /b',
+    'touch': 'type nul >',
+    'rm': 'del',
+    'rm -rf': 'rmdir /s /q',
+    'rm -r': 'rmdir /s',
+    'cp': 'copy',
+    'mv': 'move',
+    'mkdir': 'md',
+    'rmdir': 'rmdir',
+    'chmod': 'icacls',
+    'ps': 'tasklist',
+    'kill': 'taskkill',
+    'whoami': 'whoami',
+    'hostname': 'hostname',
+    'date': 'date /t',
+    'uptime': 'systeminfo | findstr /C:"System Boot Time"',
+  };
+  
+  for (const [unix, win] of Object.entries(exactMap)) {
+    if (command.toLowerCase() === unix.toLowerCase()) {
+      return win;
+    }
+  }
+  
+  // Pattern translations
+  if (command.toLowerCase().startsWith('ls ')) {
+    return 'dir ' + command.slice(3);
+  }
+  
+  if (command.toLowerCase().startsWith('cat ')) {
+    return 'type ' + command.slice(4);
+  }
+  
+  if (command.toLowerCase().startsWith('grep ')) {
+    // grep -rn "pattern" . → findstr /s /i "pattern" .
+    return command.replace(/grep\s+(-[a-zA-Z]+\s+)?/i, 'findstr /s /i ');
+  }
+  
+  if (command.toLowerCase().startsWith('find ')) {
+    // find . -name "*.ext" → dir /s /b *.ext
+    const nameMatch = command.match(/find\s+\.?\s*-name\s+["']?\*?(\.[a-z0-9]+)["']?/i);
+    if (nameMatch) {
+      return `dir /s /b *${nameMatch[1]}`;
+    }
+    return command.replace(/^find\s/i, 'dir /s /b ');
+  }
+  
+  if (command.toLowerCase().startsWith('git ')) {
+    // Git commands work on Windows if git is installed
+    return command;
+  }
+  
+  return command;
 }
 
 // ============================================================================
@@ -283,7 +674,8 @@ async function executeTool(toolCall, skipSafetyCheck = false) {
 
 const PLANNING_TRIGGERS = [
   /\b(and|then|after|before|while)\b/i,           // Multi-step connectors
-  /\b(show|tell|explain)\s+(me\s+)?(how|what|where|why)\b/i,  // Exploration
+  /\b(show|tell|explain)\s+(me\s+)?(how|what|where|why|all)\b/i,  // Exploration
+  /\b(all\s+(files?|items?|contents?))\b/i,       // "all files" pattern
   /\b(find|locate|search).+\b(and|then)\b/i,      // Search + action
   /\b(explore|investigate|analyze|debug)\b/i,      // Complex tasks
   /\b(setup|install|configure|build|deploy)\b/i,   // Multi-step operations
@@ -296,26 +688,37 @@ const MODES = {
 };
 
 let currentMode = MODES.TOOL;  // Default to tool mode
+let currentWorkingDir = process.cwd();  // Track working directory globally
 
 function needsPlanning(input) {
   return PLANNING_TRIGGERS.some(p => p.test(input));
 }
 
 function parsePlan(llmResponse) {
-  // Extract numbered steps from LLM response
   const steps = [];
   const lines = llmResponse.split('\n');
 
   for (const line of lines) {
-    // Match: "1. ls -la" or "1) ls -la" or "- ls -la"
-    const match = line.match(/^\s*[\d\-\*]\.?\s*(.+)$/);
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    
+    // Match numbered lists: "1. ls -la" or "1) ls -la" or "1 - ls -la"
+    const match = trimmed.match(/^\s*(\d+)[\.\)\-]\s*(.+)$/);
     if (match) {
-      const cmd = match[1].trim();
-      // Extract command if it's in format "ls -la (description)"
-      const cmdMatch = cmd.match(/^([a-z]+\s+.+?)\s*\(/i);
-      if (cmdMatch) {
-        steps.push(cmdMatch[1].trim());
-      } else if (!cmd.includes('(') && cmd.length < 100) {
+      let cmd = match[2].trim();
+      
+      // Remove parenthetical explanations
+      cmd = cmd.replace(/\s*\(.*?\)\s*$/, '').trim();
+      // Remove markdown formatting
+      cmd = cmd.replace(/\*\*/g, '').replace(/`/g, '').trim();
+      
+      // Skip if too short or too long
+      if (cmd.length < 3 || cmd.length > 200) continue;
+      
+      // Only accept lines that start with actual shell commands (including Windows)
+      const commandStarters = /^(ls|find|cat|grep|git|dir|echo|cd|mkdir|touch|rm|cp|mv|Get-ChildItem|Select-String|Get-Content|xargs|head|tail|wc|pwd|type|more|findstr|md|del|copy|move|tasklist|taskkill|whoami|hostname|date)\b/i;
+      
+      if (commandStarters.test(cmd)) {
         steps.push(cmd);
       }
     }
@@ -324,17 +727,31 @@ function parsePlan(llmResponse) {
   return steps;
 }
 
-async function executePlan(originalInput, steps) {
+async function executePlan(originalInput, steps, workingDir = process.cwd()) {
   console.log(`\n📋 Executing ${steps.length} step plan...\n`);
 
   const results = [];
+  let currentDir = workingDir;
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     console.log(`\n[Step ${i + 1}/${steps.length}] ${step}`);
 
     try {
-      const result = await executeTool({ type: 'bash', command: step });
+      // Translate Unix commands to Windows
+      const translatedStep = translateToWindows(step);
+      if (translatedStep !== step) {
+        console.log(`   🔄 Translated: ${step} → ${translatedStep}`);
+      }
+      
+      const result = await executeTool({ type: 'bash', command: translatedStep }, false, { cwd: currentDir });
+      
+      // If cd succeeded, update working directory
+      if (step.startsWith('cd ') && result.success) {
+        currentDir = result.output;
+        console.log(`📍 Changed to: ${currentDir}`);
+      }
+      
       console.log(`📋 ${result.output.split('\n')[0] || '(executed)'}`);
       results.push({ step, success: result.success, output: result.output });
 
@@ -345,7 +762,9 @@ async function executePlan(originalInput, steps) {
           content: `Task: ${originalInput}\nCompleted step ${i + 1}/${steps.length}\nResult: ${result.output}\n\nShould we continue with remaining steps? Reply ONLY "yes" or "no".`
         }]);
 
-        if (checkResponse.toLowerCase().includes('no')) {
+        // Extract content from response object
+        const answer = (checkResponse.content || checkResponse.full || '').toLowerCase();
+        if (answer.includes('no')) {
           console.log('⏹️  Stopping plan execution');
           break;
         }
@@ -364,28 +783,42 @@ async function handleComplexTask(input) {
   console.log('\n🧠 Complex task detected - creating plan...\n');
 
   // Step 1: Ask LLM to create a plan
-  const planPrompt = await callLLM([{
+  const planResponse = await callLLM([{
     role: 'user',
     content: `Task: ${input}
 
-Create a step-by-step plan with shell commands to accomplish this task.
-Format each step as: command (brief explanation)
+Give me a numbered list of shell commands to do this.
 
-Example:
-1. find . -type d -name "AEN" (find the project directory)
-2. cd ./AEN && ls -la (enter and list contents)
-3. ls -d */ (show subdirectories)
+Use ONLY these Windows commands:
+1. cd directory
+2. dir
+3. type filename
+4. findstr /s /i "pattern" *.ext
+5. git status
 
-Keep commands simple and safe. Maximum 5 steps.`
-  }]);
+Format:
+1. cd ../anchor-engine-node
+2. dir
+3. type package.json
 
-  console.log('📝 Plan:\n', planPrompt.split('\n').slice(0, 10).join('\n'));
+Start with the numbered list.`
+  }], { maxTokens: 256 });
 
-  // Step 2: Parse the plan
-  const steps = parsePlan(planPrompt);
+  // Parse plan from the FULL response (thinking + content)
+  const fullText = planResponse.full || planResponse.content || '';
+  const steps = parsePlan(fullText);
+  
+  console.log('📝 Plan:');
+  if (steps.length > 0) {
+    steps.forEach((step, i) => console.log(`   ${i + 1}. ${step}`));
+  } else {
+    console.log('   Could not extract steps from response');
+    console.log(`   Raw: ${fullText.slice(0, 100)}...`);
+  }
 
   if (steps.length === 0) {
     console.log('⚠️  Could not parse plan from LLM response');
+    console.log('💡 Response was:', planResponse.content.slice(0, 200));
     return null;
   }
 
@@ -399,12 +832,12 @@ Keep commands simple and safe. Maximum 5 steps.`
     content: `Original task: ${input}
 
 Steps executed:
-${results.map((r, i) => `${i + 1}. ${r.step}\n   Result: ${r.output.slice(0, 200)}`).join('\n')}
+${results.map((r, i) => `${i + 1}. ${r.step}\n   Success: ${r.success}`).join('\n')}
 
-Provide a clear, helpful summary of what was found/accomplished.`
+Provide a brief summary of what was accomplished.`
   }]);
 
-  return summary;
+  return summary.content;
 }
 
 function truncateContext(messages, maxMessages) {
@@ -439,13 +872,16 @@ async function runAgentLoop() {
   const messages = [];
   const sessionId = `session-${Date.now()}`;
   const voiceManager = new VoiceManager({ processInput: null }); // Will set below
+  // currentWorkingDir is global - initialized above
 
-  console.log('🤖 micro-nanobot v0.1.0');
+  console.log('🤖 micro-nanobot v0.2.0 - Local Coding Agent');
   console.log(`📡 LLM: ${config.llmUrl} (${config.model})`);
-  console.log('💡 Commands: /quit, /clear, /config, /tool, /plan, /chat');
+  console.log(`📍 Working: ${currentWorkingDir}`);
+  console.log('💡 Commands: /quit, /clear, /config, /tool, /plan, /chat, /code');
   console.log('📅 Schedule: /schedule, /schedules, /unschedule');
-  console.log('🎤 Voice: /voice, /speak, /handsfree\n');
-  console.log('📍 Mode: /tool (execute), /plan (multi-step), /chat (conversation)\n');
+  console.log('🎤 Voice: /voice, /speak, /handsfree');
+  console.log('🔧 Tools: /test (run tests), /build, /search <query>\n');
+  console.log('📍 Mode: /tool (execute), /plan (multi-step), /chat (conversation), /code (smart)\n');
 
   // Create agent reference for voice manager
   const agent = {
@@ -489,6 +925,35 @@ async function handleUserInput(userInput, rl, messages, voiceManager) {
 
   if (trimmed === '/config') {
     console.log('📋 Current config:', JSON.stringify(config, null, 2), '\n');
+    return;
+  }
+
+  // Code agent commands
+  if (trimmed === '/code') {
+    currentMode = MODES.PLAN;
+    console.log('💻 Mode: CODE (smart code-aware mode)\n');
+    return;
+  }
+
+  if (trimmed === '/test' || trimmed.startsWith('/test ')) {
+    console.log('🧪 Running tests...');
+    const result = await toolRunTests();
+    console.log(`📋 ${result.output}`);
+    return;
+  }
+
+  if (trimmed === '/build') {
+    console.log('🔨 Building project...');
+    const result = await toolBuild();
+    console.log(`📋 ${result.output}`);
+    return;
+  }
+
+  if (trimmed.startsWith('/search ') || trimmed.startsWith('/grep ')) {
+    const query = trimmed.replace(/^\/(search|grep)\s+/, '');
+    console.log(`🔍 Searching for: ${query}`);
+    const result = await toolCodeSearch(query);
+    console.log(`📋 ${result.output}`);
     return;
   }
 
@@ -556,9 +1021,6 @@ async function processCommand(input, messages, voiceManager) {
   const trimmed = input.trim();
   if (!trimmed) return;
 
-  // Debug: Show mode
-  // console.log(`[DEBUG] Mode: ${currentMode}, Input: ${trimmed}`);
-
   // Check for /t prefix (one-time tool mode)
   let useTool = currentMode === MODES.TOOL;
   let cmdInput = trimmed;
@@ -567,29 +1029,64 @@ async function processCommand(input, messages, voiceManager) {
     cmdInput = trimmed.slice(3);
   }
 
-  // STEP 1: Check if we should execute tools
+  // STEP 1: Check if we should execute tools (direct intent match)
   if (useTool || currentMode === MODES.TOOL) {
     const intent = extractIntent(cmdInput);
 
     if (intent) {
-      // We understood the intent - execute directly
-      console.log(`\n🎯 Intent: ${intent.command} (confidence: ${intent.confidence})`);
+      // Execute the intent directly (could be bash or any tool type)
+      if (intent.type === 'bash') {
+        console.log(`\n🎯 Intent: ${intent.command} (confidence: ${intent.confidence})`);
+      } else {
+        console.log(`\n🎯 Tool: ${intent.type} (confidence: ${intent.confidence})`);
+      }
       console.log('🔧 Executing...');
 
-      const result = await executeTool({ type: 'bash', command: intent.command });
+      const result = await executeTool(intent, false, { cwd: currentWorkingDir });
+      
+      // If cd command succeeded, update working directory
+      if (intent.command.startsWith('cd ') && result.success) {
+        currentWorkingDir = result.output;
+        console.log(`📍 Changed to: ${currentWorkingDir}`);
+      }
+      
       console.log(`📋 Result: ${result.output}`);
 
-      // Speak response if enabled
       if (voiceManager && voiceManager.speakResponses) {
-        await voiceManager.speakResponse(`Command executed: ${intent.command}. ${result.output.split('\n')[0]}`);
+        await voiceManager.speakResponse(`Executed: ${result.output.split('\n')[0]}`);
       }
 
-      // Clear context after single-turn command
       messages.length = 0;
       return;
-    } else {
-      // Debug: No intent matched
-      // console.log(`[DEBUG] No intent matched for: ${cmdInput}`);
+    }
+  }
+
+  // STEP 1.5: Check for code-specific intents
+  const codeIntent = extractCodeIntent(cmdInput);
+  if (codeIntent && (currentMode === MODES.PLAN || currentMode === MODES.CHAT)) {
+    console.log(`\n🎯 Code Intent: ${codeIntent.type}`);
+    
+    switch (codeIntent.type) {
+      case 'run_tests':
+        console.log('🧪 Running tests...');
+        const testResult = await executeTool({ type: 'run_tests' });
+        console.log(`📋 ${testResult.output}`);
+        messages.length = 0;
+        return;
+      
+      case 'build':
+        console.log('🔨 Building...');
+        const buildResult = await executeTool({ type: 'build' });
+        console.log(`📋 ${buildResult.output}`);
+        messages.length = 0;
+        return;
+      
+      case 'code_search':
+        console.log(`🔍 Searching for: ${codeIntent.query}`);
+        const searchResult = await executeTool({ type: 'code_search', query: codeIntent.query });
+        console.log(`📋 ${searchResult.output}`);
+        messages.length = 0;
+        return;
     }
   }
 
@@ -598,8 +1095,6 @@ async function processCommand(input, messages, voiceManager) {
     const summary = await handleComplexTask(cmdInput);
     if (summary) {
       console.log(`\n💬 Summary:\n${summary}`);
-
-      // Speak summary if enabled
       if (voiceManager && voiceManager.speakResponses) {
         await voiceManager.speakResponse(summary.split('\n')[0]);
       }
@@ -608,18 +1103,69 @@ async function processCommand(input, messages, voiceManager) {
     return;
   }
 
-  // STEP 3: Chat mode - just conversation
+  // STEP 3: Chat mode - conversation
   messages.push({ role: 'user', content: cmdInput });
   console.log('🤔 Thinking...');
 
   try {
     const response = await callLLM(messages);
-    console.log(`\n💬 ${response}`);
-    messages.push({ role: 'assistant', content: response });
+    const { reasoning, content: finalResponse, full } = response;
+    
+    // Show reasoning if present
+    if (reasoning) {
+      console.log(`\n💭 Thinking: ${reasoning.split('\n').slice(0, 3).join(' ')}...`);
+    }
+    
+    console.log(`\n💬 ${finalResponse}`);
+    
+    // NEW: Check if model response IS a shell command
+    const trimmedResponse = finalResponse.trim();
+    const isShellCommand = /^(ls|cat|pwd|date|echo|mkdir|touch|rm|cp|mv|cd|grep|find|head|tail|wc|ps|free|df|du|uptime|whoami|hostname|git|npm|node|python|bash|sh|dir|Get-ChildItem|Get-Content|Get-Location|type|findstr|more|tasklist|taskkill|md|del|copy|move)\b/i.test(trimmedResponse);
+    
+    if (isShellCommand) {
+      // Translate Unix commands to Windows equivalents
+      let command = translateToWindows(trimmedResponse);
+      
+      if (command !== trimmedResponse) {
+        console.log(`\n   🔄 Translated: ${trimmedResponse} → ${command}`);
+      }
+      
+      console.log(`\n🎯 Model output is a command, executing...`);
+      const result = await executeTool({ type: 'bash', command }, false, { cwd: currentWorkingDir });
+      
+      // If cd command succeeded, update working directory
+      if (command.startsWith('cd ') && result.success) {
+        currentWorkingDir = result.output;
+        console.log(`📍 Changed to: ${currentWorkingDir}`);
+      }
+      
+      console.log(`📋 Result: ${result.output}`);
+      messages.length = 0;
+      return;
+    }
+    
+    // NEW: Check if model triggered any tools
+    const toolResults = await executeModelToolCalls(response, executeTool);
+    if (toolResults) {
+      console.log(`\n📋 Tool Results:`);
+      toolResults.forEach((tr, i) => {
+        console.log(`   ${i + 1}. ${tr.result.output.split('\n')[0]}`);
+      });
+      
+      // Feed results back to model for summary
+      console.log('\n🔄 Generating summary...');
+      const summary = await callLLM([
+        ...messages,
+        { role: 'assistant', content: full },
+        { role: 'user', content: `Tools executed:\n${toolResults.map(tr => tr.result.output).join('\n')}\n\nSummarize what was done.` }
+      ]);
+      console.log(`\n💬 Summary: ${summary.content}`);
+    }
+    
+    messages.push({ role: 'assistant', content: full });
 
-    // Speak response if enabled
     if (voiceManager && voiceManager.speakResponses) {
-      await voiceManager.speakResponse(response);
+      await voiceManager.speakResponse(finalResponse);
     }
   } catch (e) {
     console.log(`❌ Error: ${e.message}`);

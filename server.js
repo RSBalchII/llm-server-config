@@ -231,6 +231,7 @@ async function proxy(req, res) {
             try {
                 const parsed = JSON.parse(body);
                 parsed.model = MODEL_NAME;
+                parsed.stream = false;  // Force non-streaming (Qwen Code expects JSON)
                 body = JSON.stringify(parsed);
             } catch {}
         }
@@ -299,7 +300,6 @@ const server = createServer(async (req, res) => {
 
 // ── Start ────────────────────────────────────────────────────────
 server.listen(PROXY_PORT, () => {
-    console.log(`[DEBUG] MODEL_NAME env = "${process.env.MODEL_NAME}"`);
     console.log('══════════════════════════════════════════════');
     console.log('══════════════════════════════════════════════');
     console.log('  micro-nanobot Server (with Tool Support)');
@@ -318,7 +318,23 @@ server.listen(PROXY_PORT, () => {
     console.log('══════════════════════════════════════════════');
 });
 
-process.on('SIGINT', () => {
-    console.log('\n👋 Shutting down...');
-    server.close(() => process.exit(0));
+// ── Graceful Shutdown ──────────────────────────────────────────
+function gracefulShutdown(signal) {
+    console.log(`\n👋 ${signal} - shutting down...`);
+    server.close(() => {
+        console.log('✅ HTTP server closed');
+        process.exit(0);
+    });
+    // Force exit after 5 seconds
+    setTimeout(() => {
+        console.log('⚠️  Force exiting');
+        process.exit(1);
+    }, 5000);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught exception:', err.message);
+    process.exit(1);
 });

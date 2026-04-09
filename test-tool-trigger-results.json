@@ -1,0 +1,47 @@
+[
+  {
+    "name": "File listing request",
+    "passed": true,
+    "toolCall": {
+      "action": "list",
+      "command": "ls -la",
+      "full": "I'll list files: ls -la"
+    }
+  },
+  {
+    "name": "File reading request",
+    "passed": true,
+    "toolCall": {
+      "action": "read",
+      "command": "cat package.json",
+      "full": "I'll read: cat package.json"
+    }
+  },
+  {
+    "name": "Search request",
+    "passed": true,
+    "toolCall": {
+      "action": "search",
+      "command": "grep -r \"function\" *.js",
+      "full": "I'll search for \"function\" in all JS files:\n\ngrep -r \"function\" *.js"
+    }
+  },
+  {
+    "name": "Git status request",
+    "passed": true,
+    "toolCall": {
+      "action": "bash\ngit status\n",
+      "command": "`bash\ngit status\n`",
+      "full": "`bash\ngit status\n`"
+    }
+  },
+  {
+    "name": "File creation request",
+    "passed": true,
+    "toolCall": {
+      "action": "create",
+      "command": "I'll create: echo \"hello world\" > test.txt",
+      "full": "I'll create the file test.txt with \"hello world\" content:\n\nI'll create: echo \"hello world\" > test.txt"
+    }
+  }
+]

@@ -1,0 +1,263 @@
+[
+  {
+    "model": "Qwen3.5-4B-Q4_K_M",
+    "passed": 10,
+    "failed": 0,
+    "tests": [
+      {
+        "name": "Current directory",
+        "input": "what directory are we in?",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "pwd"
+      },
+      {
+        "name": "Change directory",
+        "input": "cd ..",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "cd .."
+      },
+      {
+        "name": "List directory contents",
+        "input": "ls",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "ls -la"
+      },
+      {
+        "name": "Read file contents",
+        "input": "read package.json",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "cat package.json"
+      },
+      {
+        "name": "Create new file",
+        "input": "create a file called test.txt with \"hello world\"",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "echo \"hello world\" > test.txt"
+      },
+      {
+        "name": "Append to file",
+        "input": "append \"new line\" to test.txt",
+        "expectType": "append_file",
+        "expectSuccess": true,
+        "passed": true,
+        "command": "echo \"new line\" >> test.txt"
+      },
+      {
+        "name": "Search for function",
+        "input": "search for \"function\" in all JS files",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "grep -r \"function\" --include=\"*.js\" ."
+      },
+      {
+        "name": "Find specific file",
+        "input": "find all JSON config files",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "find . -name \"*.json\" -type f"
+      },
+      {
+        "name": "Git status",
+        "input": "check git status",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "git status"
+      },
+      {
+        "name": "Git log",
+        "input": "show recent git commits",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "git log --oneline -10"
+      }
+    ]
+  },
+  {
+    "model": "Gemma-4-E4B-Heretic",
+    "passed": 10,
+    "failed": 0,
+    "tests": [
+      {
+        "name": "Current directory",
+        "input": "what directory are we in?",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "pwd"
+      },
+      {
+        "name": "Change directory",
+        "input": "cd ..",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "cd .."
+      },
+      {
+        "name": "List directory contents",
+        "input": "ls",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "ls -a"
+      },
+      {
+        "name": "Read file contents",
+        "input": "read package.json",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "cat package.json"
+      },
+      {
+        "name": "Create new file",
+        "input": "create a file called test.txt with \"hello world\"",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "echo \"hello world\" > test.txt"
+      },
+      {
+        "name": "Append to file",
+        "input": "append \"new line\" to test.txt",
+        "expectType": "append_file",
+        "expectSuccess": true,
+        "passed": true,
+        "command": "echo \"new line\" >> test.txt"
+      },
+      {
+        "name": "Search for function",
+        "input": "search for \"function\" in all JS files",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "grep \"function\" *.js"
+      },
+      {
+        "name": "Find specific file",
+        "input": "find all JSON config files",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "find . -name \"*.json\""
+      },
+      {
+        "name": "Git status",
+        "input": "check git status",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "git status"
+      },
+      {
+        "name": "Git log",
+        "input": "show recent git commits",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "git log -n 5 --oneline"
+      }
+    ]
+  },
+  {
+    "model": "Qwen7B-Obliteratus-IQ4",
+    "passed": 6,
+    "failed": 4,
+    "tests": [
+      {
+        "name": "Current directory",
+        "input": "what directory are we in?",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "pwd"
+      },
+      {
+        "name": "Change directory",
+        "input": "cd ..",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "cd .."
+      },
+      {
+        "name": "List directory contents",
+        "input": "ls",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "ls"
+      },
+      {
+        "name": "Read file contents",
+        "input": "read package.json",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": false,
+        "error": "No command detected"
+      },
+      {
+        "name": "Create new file",
+        "input": "create a file called test.txt with \"hello world\"",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": false,
+        "error": "Wrong command: cat << EOL"
+      },
+      {
+        "name": "Append to file",
+        "input": "append \"new line\" to test.txt",
+        "expectType": "append_file",
+        "expectSuccess": true,
+        "passed": true,
+        "command": "cat >> test.txt"
+      },
+      {
+        "name": "Search for function",
+        "input": "search for \"function\" in all JS files",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": false,
+        "error": "No command detected"
+      },
+      {
+        "name": "Find specific file",
+        "input": "find all JSON config files",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": false,
+        "error": "No command detected"
+      },
+      {
+        "name": "Git status",
+        "input": "check git status",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "git status --porcelain"
+      },
+      {
+        "name": "Git log",
+        "input": "show recent git commits",
+        "expectCmd": {},
+        "expectSuccess": true,
+        "passed": true,
+        "command": "git log -n -c < today's date>"
+      }
+    ]
+  }
+]

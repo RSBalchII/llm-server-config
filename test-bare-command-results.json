@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Current directory",
+    "passed": true,
+    "content": "pwd"
+  },
+  {
+    "name": "List files",
+    "passed": true,
+    "content": "ls -la"
+  },
+  {
+    "name": "Git status",
+    "passed": true,
+    "content": "git status"
+  },
+  {
+    "name": "Show date",
+    "passed": true,
+    "content": "date"
+  },
+  {
+    "name": "Greeting (NOT a command)",
+    "passed": true,
+    "content": ""
+  }
+]

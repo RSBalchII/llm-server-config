@@ -1,0 +1,194 @@
+[
+  {
+    "model": "Qwen3.5-4B-heretic",
+    "arch": "qwen",
+    "tests": [
+      {
+        "test": "echo_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'Qwen3.5-4B-heretic' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      },
+      {
+        "test": "dir_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'Qwen3.5-4B-heretic' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    ],
+    "passed": 0,
+    "total": 2
+  },
+  {
+    "model": "gemma-4-E4B-it-Heretic",
+    "arch": "gemma",
+    "tests": [
+      {
+        "test": "echo_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'gemma-4-E4B-it-Heretic' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      },
+      {
+        "test": "dir_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'gemma-4-E4B-it-Heretic' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    ],
+    "passed": 0,
+    "total": 2
+  },
+  {
+    "model": "gemma-4-26B-A4B-it-heretic",
+    "arch": "gemma-moe",
+    "tests": [
+      {
+        "test": "echo_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'gemma-4-26B-A4B-it-heretic' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      },
+      {
+        "test": "dir_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'gemma-4-26B-A4B-it-heretic' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    ],
+    "passed": 0,
+    "total": 2
+  },
+  {
+    "model": "DeepSeek-R1-0528-Qwen3-8B",
+    "arch": "deepseek-qwen",
+    "tests": [
+      {
+        "test": "echo_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'DeepSeek-R1-0528-Qwen3-8B' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      },
+      {
+        "test": "dir_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'DeepSeek-R1-0528-Qwen3-8B' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    ],
+    "passed": 0,
+    "total": 2
+  },
+  {
+    "model": "DeepSeek-R1-Distill-Qwen-7B",
+    "arch": "deepseek-qwen",
+    "tests": [
+      {
+        "test": "echo_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'DeepSeek-R1-Distill-Qwen-7B' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      },
+      {
+        "test": "dir_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'DeepSeek-R1-Distill-Qwen-7B' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    ],
+    "passed": 0,
+    "total": 2
+  },
+  {
+    "model": "Stable-DiffCoder-8B",
+    "arch": "diffusion-coder",
+    "tests": [
+      {
+        "test": "echo_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'Stable-DiffCoder-8B' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      },
+      {
+        "test": "dir_command",
+        "passed": false,
+        "error": "HTTP 400",
+        "response": {
+          "error": {
+            "code": 400,
+            "message": "model 'Stable-DiffCoder-8B' not found",
+            "type": "invalid_request_error"
+          }
+        }
+      }
+    ],
+    "passed": 0,
+    "total": 2
+  }
+]

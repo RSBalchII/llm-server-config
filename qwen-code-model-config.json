@@ -1,0 +1,19 @@
+{
+  "local-qwen3.5-4b-heretic": {
+    "id": "local-qwen3.5-4b-heretic",
+    "name": "Qwen3.5-4B Heretic (Local)",
+    "baseUrl": "http://127.0.0.1:8888/v1",
+    "envKey": "LOCAL_API_KEY",
+    "generationConfig": {
+      "timeout": 300000,
+      "maxRetries": 2,
+      "contextWindowSize": 8192,
+      "samplingParams": {
+        "temperature": 0.6,
+        "top_p": 0.9,
+        "max_tokens": 8192,
+        "stop": ["<｜end▁of▁sentence｜>"]
+      }
+    }
+  }
+}
