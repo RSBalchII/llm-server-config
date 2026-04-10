@@ -1,6 +1,7 @@
 @echo off
-REM micro-nanobot Server Launcher (v0.4.0 - Portable)
-REM Bundled llama-server - no external dependencies
+REM micro-nanobot - Portable Llama Server (v0.4.0)
+ Bundled llama-server - no external dependencies
+REM Connect Qwen Code or any client to http://127.0.0.1:8080
 
 setlocal enabledelayedexpansion
 
@@ -10,20 +11,16 @@ set PORT=18080
 
 echo.
 echo ========================================
-echo   micro-nanobot v0.4.0 (Portable)
+echo   micro-nanobot Server (Portable)
 echo ========================================
 echo.
 
-REM Check llama-server exists
 if not exist "%LLAMA_SERVER%" (
     echo ERROR: bin\llama-server.exe not found
     pause
     exit /b 1
 )
 
-REM ============================================================================
-REM SCAN MODELS
-REM ============================================================================
 echo Scanning for models...
 echo.
 
@@ -43,17 +40,13 @@ for %%d in (%model_dirs%) do (
 
 if %model_count%==0 (
     echo   No GGUF models found.
-    echo   Place models in .\models\ or %%USERPROFILE%%\models\
     pause
     exit /b 1
 )
 
-echo   Total models found: %model_count%
+echo   Total: %model_count% models
 echo.
 
-REM ============================================================================
-REM DISPLAY MODELS
-REM ============================================================================
 echo Available models:
 echo.
 for /l %%i in (1,1,%model_count%) do (
@@ -61,7 +54,6 @@ for /l %%i in (1,1,%model_count%) do (
     for %%A in ("!path!") do set "size=%%~zA"
     echo   %%i^) !model_name_%%i!
     echo       Size: !size! bytes
-    echo       Path: !path!
     echo.
 )
 
@@ -69,16 +61,8 @@ echo   0^) Cancel
 echo.
 set /p choice="Select model (number): "
 
-if "!choice!"=="0" (
-    echo Cancelled
-    exit /b 0
-)
-
-if !choice! lss 1 if !choice! gtr %model_count% (
-    echo Invalid choice
-    pause
-    exit /b 1
-)
+if "!choice!"=="0" ( echo Cancelled & exit /b 0 )
+if !choice! lss 1 if !choice! gtr %model_count% ( echo Invalid & pause & exit /b 1 )
 
 set "selected_model=!model_%choice%!"
 set "selected_name=!model_name_%choice%!"
@@ -86,14 +70,11 @@ set "selected_name=!model_name_%choice%!"
 echo.
 echo ========================================
 echo   Model: %selected_name%
-echo   Port: http://127.0.0.1:%PORT%
+echo   URL: http://127.0.0.1:%PORT%
+echo   API: http://127.0.0.1:%PORT%/v1
 echo ========================================
 echo.
-
-echo.
-echo Starting llama-server with full GPU acceleration...
-echo.
-echo Press Ctrl+C to stop the server.
+echo Press Ctrl+C to stop
 echo.
 
 cd /d "%SCRIPT_DIR%bin"

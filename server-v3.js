@@ -254,7 +254,7 @@ async function main() {
                     return;
                 }
 
-                // Streaming (SSE)
+                // Streaming (SSE) - send raw text without any formatting/splitting
                 res.writeHead(200, {
                     'Content-Type': 'text/event-stream',
                     'Cache-Control': 'no-cache',
@@ -262,33 +262,28 @@ async function main() {
                     'Access-Control-Allow-Origin': '*'
                 });
 
-                let tokenCount = 0;
                 const text = await session.prompt(userMsg, {
                     maxTokens: parsed.max_tokens ?? 2048,
                     temperature: parsed.temperature ?? 0.6,
                     topK: parsed.top_k ?? 40,
                     topP: parsed.top_p ?? 0.9,
-                    repeatPenalty: 1.1,
-                    onToken: (tokens) => {
-                        for (const t of tokens) {
-                            tokenCount++;
-                            const data = JSON.stringify({
-                                id: 'chatcmpl-' + Date.now(),
-                                object: 'chat.completion.chunk',
-                                created: Math.floor(Date.now() / 1000),
-                                model: sel.name,
-                                choices: [{
-                                    index: 0,
-                                    delta: { content: t },
-                                    finish_reason: null
-                                }]
-                            });
-                            res.write(`data: ${data}\n\n`);
-                        }
-                    }
+                    repeatPenalty: 1.1
                 });
 
-                // Final chunk
+                // Send entire response as single chunk, then close
+                const data = JSON.stringify({
+                    id: 'chatcmpl-' + Date.now(),
+                    object: 'chat.completion.chunk',
+                    created: Math.floor(Date.now() / 1000),
+                    model: sel.name,
+                    choices: [{
+                        index: 0,
+                        delta: { content: text },
+                        finish_reason: null
+                    }]
+                });
+                res.write(`data: ${data}\n\n`);
+
                 res.write(`data: ${JSON.stringify({
                     id: 'chatcmpl-' + Date.now(),
                     object: 'chat.completion.chunk',
@@ -299,7 +294,7 @@ async function main() {
                 res.write('data: [DONE]\n\n');
                 res.end();
 
-                console.log(`✅ Streamed ${tokenCount} tokens\n`);
+                console.log(`✅ Response: ${text.split(/\s+/).length} tokens\n`);
             } catch (err) {
                 console.error('❌ Chat error:', err.message);
                 if (!res.headersSent) {
