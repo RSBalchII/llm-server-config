@@ -74,3 +74,27 @@ true
 
 ## Description
 File and directory operations, including append, prepend, replace, move, and copy
+
+---
+
+# Available Skills (Complete List)
+
+| Skill File | Covers |
+|------------|--------|
+| `files.md` | File operations, directory listing, content manipulation |
+| `git.md` | Git commands, branching, merging, staging |
+| `help.md` | Help system, skill reference, command lookup |
+| `loader.js` | Skill file parser and hot-reload system |
+| `search.md` | Search operations, grep, find, pattern matching |
+| `system.md` | System info, process management, environment |
+| `moe-architecture.md` | MoE models, expert routing, A3B, sparse parameters, VMM |
+| `gguf-quantization.md` | IQ4_XS, Q4_K_M, Q5_K_S, BPW, imatrix, calibration |
+| `physics-walker.md` | Graph search, radial inflation, context inflator, atoms/molecules |
+| `kv-cache-vram.md` | VRAM management, KV cache, checkpointing, GPU offloading |
+| `flash-attention-ssm.md` | Flash attention, Gated Delta Net, SSM, MROPE, hybrid models |
+| `engram-system.md` | Content fingerprinting, deduplication, molecular signatures |
+| `token-streaming.md` | SSE protocol, onToken callbacks, detokenization, real-time |
+| `context-serialization.md` | Graph packaging, user context, query intent, memory nodes |
+| `llama-server-config.md` | Server tuning, batch sizing, parallel slots, performance |
+| `research-harness.md` | Research automation, Anchor integration, web fetching, reports |
+| `anchor-engine.md` | Knowledge engine, ingestion, distillation, exploration, PGlite |
