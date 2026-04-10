@@ -13,6 +13,8 @@
 
 **Web URLs:** Collected and saved in `./research/web-<timestamp>.html` for Anchor Engine web search tool.
 
+**Anchor Web Search:** Automatically parses HTML into markdown knowledge chunks via Anchor Engine's `/v1/memory/web-search` endpoint.
+
 ---
 
 ## Afternoon News Cycle Research (2 PM)

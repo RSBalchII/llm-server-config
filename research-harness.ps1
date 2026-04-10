@@ -176,11 +176,37 @@ function Fetch-WebContent {
         $html | Out-File -FilePath $OutputFile -Encoding UTF8
         Write-Host "  Saved HTML to: $OutputFile" -ForegroundColor DarkGray
         
-        # Extract URLs from HTML (simplified - in practice use BeautifulSoup or similar)
-        # For now, just return the URL as-is
+        # Return URL for Anchor web search tool to parse
         return $Url
     } catch {
         Write-Host "⚠️  Web fetch error for $Url: $_" -ForegroundColor Yellow
+        return $null
+    }
+}
+
+function Invoke-AnchorWebSearch {
+    param(
+        [string]$Url,
+        [string]$TokenBudget = "2000",
+        [string]$IncludeProvenance = "true"
+    )
+
+    $headers = @{
+        "Content-Type" = "application/json"
+        "Authorization" = "Bearer $Config.AnchorKey"
+    }
+
+    $body = @{
+        query = $Url
+        tokenBudget = $TokenBudget
+        includeProvenance = $IncludeProvenance
+    } | ConvertTo-Json
+
+    try {
+        $result = Invoke-RestMethod -Uri "$Config.AnchorUrl/api/web-search" -Method POST -Headers $headers -Body $body -TimeoutSec 30
+        return $result
+    } catch {
+        Write-Host "⚠️  Anchor web search error: $_" -ForegroundColor Yellow
         return $null
     }
 }
@@ -274,6 +300,13 @@ $ResearchSteps = @(
             foreach ($url in $WebUrls) {
                 $htmlFile = Join-Path $Config.OutputDir "web-$((Get-Date -Format 'yyyyMMdd-HHmmss')).html"
                 Fetch-WebContent -Url $url -OutputFile $htmlFile
+                
+                # Use Anchor Engine web search to parse HTML into MD
+                $webSearchResult = Invoke-AnchorWebSearch -Url $url
+                if ($webSearchResult) {
+                    Write-Host "  Anchor web search: $($webSearchResult.knowledge.Count ?? 0) knowledge chunks" -ForegroundColor Green
+                }
+                
                 $Session.urls += $url
             }
             
