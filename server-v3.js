@@ -117,31 +117,31 @@ async function main() {
     models.forEach((m, i) => console.log(`  ${i + 1}) ${m.name} (${m.sizeGB}GB)`));
     console.log('  0) Cancel\n');
 
-    const choice = parseInt(await ask('Select model (number): '));
-    if (choice < 1 || choice > models.length) { process.exit(0); }
+    const choice = await ask('Select model (number): ');
+    const trimmed = choice.trim();
+    // Handle quoted input like "1"
+    let choiceNum = Number(trimmed.replace(/^"|"$/g, '')) || 0;
+    console.log(`DEBUG: choice=${choice}, trimmed=${trimmed}, choiceNum=${choiceNum}, typeof=${typeof choiceNum}`);
+    if (choiceNum < 1 || choiceNum > models.length) { process.exit(0); }
 
-    const sel = models[choice - 1];
+    const sel = models[choiceNum - 1];
+    console.log(`DEBUG: sel=${sel}, sizeGB=${sel.sizeGB}`);
     const sizeGB = parseFloat(sel.sizeGB);
-    const maxLayers = Math.min(Math.floor(16 / (sizeGB / 41)), 41);
-    console.log(`\n📦 Model: ${sel.name}`);
-    console.log(`   Size: ${sel.sizeGB}GB, ~41 layers total`);
-    console.log(`   Est. max GPU layers on 16GB VRAM: ~${maxLayers}`);
-
+    console.log(`DEBUG: sizeGB=${sizeGB}`);
     const gpuRaw = await ask('GPU layers (number, "auto", or "max", default: auto): ');
-    const gpuLayers = gpuRaw.toLowerCase() === 'max' ? 'max'
-        : (gpuRaw.toLowerCase() === 'auto' || !gpuRaw) ? 'auto'
-        : parseInt(gpuRaw) || 'auto';
-
-    if (typeof gpuLayers === 'number' && sizeGB > 8 && gpuLayers > 33) {
-        console.log(`⚠️  ${sel.name} (${sizeGB}GB) may not fit with ${gpuLayers} GPU layers`);
-    }
-
+    
+    // Optimize GPU layers: use 'max' for models <4GB, otherwise respect user selection
+    const gpuLayers = sizeGB < 4 ? 'max' : (gpuRaw === 'max' ? 'max' : (gpuRaw === 'auto' || !gpuRaw) ? 'auto' : parseInt(gpuRaw) || 'auto');
+    console.log(`\n📦 Model: ${sel.name}`);
+    console.log(`   Size: ${sizeGB}GB`);
     console.log(`🎮 GPU layers: ${gpuLayers}`);
     console.log('⏳ Loading model...\n');
 
-    const llama = await getLlama({ gpu: 'cuda' });
-    const model = await llama.loadModel({ modelPath: sel.path, gpuLayers });
-    const ctx = await model.createContext({ contextSize: Math.min(16384, model.trainContextSize || 8192) });
+    const llama = await getLlama({ gpu: 'cuda', threads: 16 });
+    // Flash Attention support for RTX 4090
+    const model = await llama.loadModel({ modelPath: sel.path, gpuLayers, flashAttention: true });
+    // Increased batchSize to 512 for RTX 4090
+    const ctx = await model.createContext({ contextSize: Math.min(16384, model.trainContextSize || 8192), batchSize: 512 });
     const seq = ctx.getSequence();
     const wrapper = detectWrapper(sel.name);
 
@@ -225,36 +225,52 @@ async function main() {
                     }
                 }
 
-                // Non-streaming (default)
+                // Non-streaming (default) - uses onToken callback for token-by-token streaming
                 if (!stream) {
+                    res.writeHead(200, {
+                        'Content-Type': 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                        'Connection': 'keep-alive',
+                        'Access-Control-Allow-Origin': '*'
+                    });
+
                     const text = await session.prompt(userMsg, {
                         maxTokens: parsed.max_tokens ?? 2048,
                         temperature: parsed.temperature ?? 0.6,
                         topK: parsed.top_k ?? 40,
                         topP: parsed.top_p ?? 0.9,
-                        repeatPenalty: 1.1
+                        repeatPenalty: 1.1,
+                        onToken: (token) => {
+                            res.write(`data: ${JSON.stringify({
+                                id: 'chatcmpl-' + Date.now(),
+                                object: 'chat.completion.chunk',
+                                created: Math.floor(Date.now() / 1000),
+                                model: sel.name,
+                                choices: [{
+                                    index: 0,
+                                    delta: { content: token },
+                                    finish_reason: null
+                                }]
+                            })}\n\n`);
+                        }
                     });
 
-                    const tokens = (typeof text === 'string' ? text : '').split(/\s+/).filter(Boolean).length;
-                    console.log(`✅ Response: ${(text || '').substring(0, 100)}...\n`);
-
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({
+                    // Send final chunk with finish_reason
+                    res.write(`data: ${JSON.stringify({
                         id: 'chatcmpl-' + Date.now(),
-                        object: 'chat.completion',
+                        object: 'chat.completion.chunk',
                         created: Math.floor(Date.now() / 1000),
                         model: sel.name,
-                        choices: [{
-                            index: 0,
-                            message: { role: 'assistant', content: text || '' },
-                            finish_reason: 'stop'
-                        }],
-                        usage: { prompt_tokens: 0, completion_tokens: tokens, total_tokens: tokens }
-                    }));
+                        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+                    })}\n\n`);
+                    res.write('data: [DONE]\n\n');
+                    res.end();
+
+                    console.log(`✅ Response: ${text.split(/\s+/).length} tokens\n`);
                     return;
                 }
 
-                // Streaming (SSE) - send raw text without any formatting/splitting
+                // Streaming (SSE) - true token-by-token streaming using onToken callback
                 res.writeHead(200, {
                     'Content-Type': 'text/event-stream',
                     'Cache-Control': 'no-cache',
@@ -262,28 +278,36 @@ async function main() {
                     'Access-Control-Allow-Origin': '*'
                 });
 
-                const text = await session.prompt(userMsg, {
+                let buffer = '';
+                await session.prompt(userMsg, {
                     maxTokens: parsed.max_tokens ?? 2048,
                     temperature: parsed.temperature ?? 0.6,
                     topK: parsed.top_k ?? 40,
                     topP: parsed.top_p ?? 0.9,
-                    repeatPenalty: 1.1
+                    repeatPenalty: 1.1,
+                    onToken: (tokens) => {
+                        // Detokenize to get the full text so far
+                        const fullText = llama.detokenize(tokens);
+                        // Extract only the new tokens since last call
+                        const newPart = fullText.slice(buffer.length);
+                        buffer = fullText;
+
+                        // Send only the new tokens
+                        res.write(`data: ${JSON.stringify({
+                            id: 'chatcmpl-' + Date.now(),
+                            object: 'chat.completion.chunk',
+                            created: Math.floor(Date.now() / 1000),
+                            model: sel.name,
+                            choices: [{
+                                index: 0,
+                                delta: { content: newPart },
+                                finish_reason: null
+                            }]
+                        })}\n\n`);
+                    }
                 });
 
-                // Send entire response as single chunk, then close
-                const data = JSON.stringify({
-                    id: 'chatcmpl-' + Date.now(),
-                    object: 'chat.completion.chunk',
-                    created: Math.floor(Date.now() / 1000),
-                    model: sel.name,
-                    choices: [{
-                        index: 0,
-                        delta: { content: text },
-                        finish_reason: null
-                    }]
-                });
-                res.write(`data: ${data}\n\n`);
-
+                // Send final chunk with finish_reason
                 res.write(`data: ${JSON.stringify({
                     id: 'chatcmpl-' + Date.now(),
                     object: 'chat.completion.chunk',
@@ -294,7 +318,8 @@ async function main() {
                 res.write('data: [DONE]\n\n');
                 res.end();
 
-                console.log(`✅ Response: ${text.split(/\s+/).length} tokens\n`);
+                console.log(`✅ Streaming Response: ${buffer.split(/\s+/).length} tokens\n`);
+                return;
             } catch (err) {
                 console.error('❌ Chat error:', err.message);
                 if (!res.headersSent) {
