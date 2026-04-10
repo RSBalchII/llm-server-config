@@ -215,14 +215,38 @@ async function main() {
 
                 if (!userMsg) throw new Error('No user message found');
 
-                // Feed previous assistant messages into session history
-                for (const msg of messages) {
-                    if (msg.role === 'system') continue;
+                // Feed conversation history into session with proper role alternation
+                // LlamaChatSession expects alternating user/assistant roles
+                const nonSystemMessages = messages.filter(m => m.role !== 'system');
+                let lastRole = null;
+
+                for (let i = 0; i < nonSystemMessages.length - 1; i++) { // Skip last (current) message
+                    const msg = nonSystemMessages[i];
+                    if (msg.role === lastRole) {
+                        // Skip duplicate roles - merge with previous if assistant
+                        if (msg.role === 'assistant' && typeof msg.content === 'string') {
+                            const lastEntry = session._chatHistory[session._chatHistory.length - 1];
+                            if (lastEntry && lastEntry.role === 'assistant') {
+                                lastEntry.message += '\n' + msg.content;
+                            }
+                        }
+                        continue;
+                    }
+
                     if (msg.role === 'assistant' && typeof msg.content === 'string') {
                         session._chatHistory.push({ role: 'assistant', message: msg.content });
-                    } else if (msg.role === 'user' && typeof msg.content === 'string' && msg !== lastUser) {
+                    } else if (msg.role === 'user' && typeof msg.content === 'string') {
                         session._chatHistory.push({ role: 'user', message: msg.content });
                     }
+                    lastRole = msg.role;
+                }
+
+                // Ensure the last entry before current prompt is user (not assistant)
+                if (session._chatHistory.length > 0 && session._chatHistory[session._chatHistory.length - 1].role === 'assistant') {
+                    // This is fine, assistant responded, next will be user
+                } else if (session._chatHistory.length > 1 && session._chatHistory[session._chatHistory.length - 1].role === 'user') {
+                    // Two users in a row - remove the duplicate
+                    session._chatHistory.pop();
                 }
 
                 // Non-streaming (default) - uses onToken callback for token-by-token streaming
