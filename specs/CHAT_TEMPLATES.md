@@ -1,144 +1,153 @@
 # Chat Template Reference
 
-Templates for all supported models.
-
-llama-server auto-detects the template from the GGUF metadata.
+Templates for all supported models. llama-server auto-detects from GGUF metadata.
 
 ---
 
 ## Template Index
 
-| Model Family | Template Name | Tool Format | Thinking |
-|-------------|--------------|-------------|----------|
-| Granite 4.0 (Tiny) | `granite` | `<|tool_call>call:name{args}<tool_call|>` | No |
-| Granite 4.0 (Small Heretic) | `granite` (same) | `<|tool_call>call:name{args}<tool_call|>` | No |
-| Gemma 4 | `gemma` | `<|tool_call>call:name{args}<tool_call|>` | Yes (`<channel>thought`) |
-| DeepSeek Distill | `deepseek-r1` | `<|tool_call_begin|>type<|tool_sep|>name + json<|tool_call_end|>` | Yes |
-| Qwen3 / Qwen3.5 | `qwen3` | `` | Yes |
-| Seed-Coder | `alpaca` (fallback) | None | No |
+| Model Family | Template | Tool Format | Thinking |
+|-------------|----------|-------------|----------|
+| Granite 4.0 | `granite` | `<|tool_call>call:name{args}<tool_call|>` | No |
+| Gemma 4 (26B) | `gemma4` | `<|tool_call>call:name{args}<tool_call|>` | Yes |
+| Gemma 4 REAP (19B) | `gemma4-reap` | `<|tool_call>call:name{args}<tool_call|>` | Yes |
+| DeepSeek Distill (7B) | `deepseek-r1` | See below | Yes |
+| DeepSeek Distill (14B) | `deepseek-r1-qwen` | See below | Yes |
+| Qwen3 / Qwen3.5 | `qwen3` | See below | Yes |
+| Qwen3.5-18B-Coding-Heretic | `qwen35` | See below | Yes |
+| Seed-Coder | `alpaca` | None | No |
 
 ---
 
 ## Granite 4.0
 
-**Models:**
-- `Huihui-granite-4.0-h-tiny-abliterated.i1-Q4_K_S.gguf` (3.7GB)
-- `mradermacher/granite-4.0-h-small-heretic_lo-i1-GGUF` (Small Heretic variant)
+**Models:** `Huihui-granite-4.0-h-tiny-abliterated.i1-Q4_K_S.gguf`
 
-Both use the same `granite` template. The Small Heretic variant includes a default system message.
-
-### Role Markers
-
-- `<|start_of_role|>role<|end_of_role|>content<|end_of_text|>`
-
-### Tool Format
-
-    <|tool_call>call:list_directory{"path": "."}<tool_call|>
-
-### System Message
-
-If no system message is provided, the Heretic variant defaults to:
-
-    You are a helpful assistant. Please ensure responses are professional, accurate, and safe.
-
-### Tool Responses in User Messages
-
-    ...
-
-### Why Granite is Fast
-
-Granite uses a hybrid architecture combining attention layers with SSM (State Space Model) Gated Delta Net layers. This makes inference significantly faster than pure attention models of similar size. The KV cache is minimal compared to MoE models.
+### Structure
+- Role: `<|start_of_role|>role<|end_of_role|>content<|end_of_text|>`
+- Tool: `<|tool_call>call:name{args}<tool_call|>`
 
 ---
 
-## Gemma 4
+## Gemma 4 (26B)
 
-**Models:** `gemma-4-26B-A4B-it-UD-Q4_K_S`, `gemma-4-E4B-it-Heretic-ARA-Refusals5_Q4_K_M`
+**Models:** `gemma-4-26B-A4B-it-heretic.IQ4_XS`, `gemma-4-E4B-it-Heretic-ARA-Refusals5_Q4_K_M`
+
+### Specs
+- Experts/layer: 128, Experts/tok: 8, Layers: 48
+- Context: 262K, Embedding: 3840
+- Sliding window: 1024, Full attn: every 6th layer
 
 ### Structure
-
-- BOS: `<s>`
-- Turn: `<|turn>role\n...<turn|>\n`
+- BOS: `<s>`, Turn: `<|turn>role\n...\n<turn|>`
 - Tool: `<|tool_call>call:name{args}<tool_call|>`
-- Tool Response: `<|tool_response>response:name{value:...}<tool_response|>`
 - Thinking: `<|channel>thought\n<channel|>`
 
 ---
 
-## DeepSeek-R1 Distill
+## Gemma 4 REAP (19B)
 
-**Models:** `DeepSeek-R1-Distill-Qwen-7B-abliterated`, `DeepSeek-R1-0528-Qwen3-8B`, `DeepSeek-R1-Distill-Llama-8B`
+**Models:** `gemma-4-19b-a4b-it-REAP.i1-Q4_K_S`
+
+### Specs
+- Experts/layer: 90 (pruned from 128), Experts/tok: 8
+- Layers: 30, Context: 262K, Embedding: 2816
+- 30% expert pruning via Cerebras REAP
+- VRAM: ~9-10GB (vs 13-14GB for 26B)
 
 ### Structure
+Same as Gemma 4, just fewer layers.
 
-- User: `<|User|>content`
-- Assistant: `<|Assistant|>content<|end_of_sentence|>`
-- Tool Call: `<|tool_call_begin|>type<|tool_sep|>name` + json block + `<|tool_call_end|>`
-- Tool Response: `<|tool_output_begin|>content<|tool_output_end|>`
-- Thinking: `<think>
-</think>
+---
 
-</think>
+## DeepSeek-R1 Distill (7B)
+
+**Models:** `DeepSeek-R1-Distill-Qwen-7B-abliterated-obliteratus.IQ4_XS`
+
+### Specs
+- Dense Qwen2, 7B params, 28 layers
+- Embedding: 3584, Context: 131K
+- RoPE freq_base: 10,000
+
+### Structure
+- BOS: `<|begin▁of▁sentence|>` (ID: 151646)
+- User: `<|User|>content`, Assistant: `<|Assistant|>content<|end▁of▁sentence|>`
+- Tool: `<|tool_call_begin|>function<|tool_sep|>name + json<|tool_call_end|>`
+- Thinking: `` -> content -> ``
+
+---
+
+## DeepSeek-R1 Distill (14B Heretic)
+
+**Models:** `DeepSeek-R1-Distill-Qwen-14B-heretic.Q4_K_S`
+
+### Specs
+- Dense Qwen2, 14B params, 48 layers
+- Embedding: 5120, Context: 131K
+- RoPE freq_base: 1,000,000 (better long-context)
+- Size: 8.57GB, VRAM: ~18-20GB (needs offloading for 16GB GPU)
+
+### Structure
+Same template as 7B. Same token IDs.
 
 ---
 
 ## Qwen3 / Qwen3.5
 
-**Models:** `Qwen3.5-4B-heretic`, `Qwen3.5-4B-heretic-v2`, `Qwen3-8B-DeepSeek-v3.2-Speciale-Distill`, `Qwen3-30B-A3B-abliterated-erotic`, `Qwen3-Coder-30B-A3B-Instruct-Heretic`
+**Models:** `Qwen3.5-4B-heretic`, `Qwen3-30B-A3B-abliterated-erotic`
 
 ### Structure
-
-- Role markers: `[START_INST]role\ncontent[END_INST]`
-- Tool: `[START_TOOL_CALL]{"name": "name", "arguments": args}[END_TOOL_CALL]`
-- Tool Response: `[START_TOOL_RESULT]\ncontent\n[END_TOOL_RESULT]`
-- Thinking: `\n\n\n\ncontent` (content between  tags is thinking/reasoning)
+- System: `[START_INST]system\ncontent[END_INST]`
+- User: `[START_INST]user\ncontent[END_INST]`
+- Assistant: `[START_INST]assistant\ncontent[END_INST]`
+- Tool: `[START_TOOL_CALL]{"name":"name","arguments":{}}[END_TOOL_CALL]`
+- Thinking: `` -> content -> ``
 
 ### Key Tokens
-
-| Token | Purpose |
-|-------|---------|
-| `[START_INST]` / `[END_INST]` | Role delimiters |
-| `[START_TOOL_CALL]` / `[END_TOOL_CALL]` | Tool call wrapper |
-| `[START_TOOL_RESULT]` / `[END_TOOL_RESULT]` | Tool output wrapper |
-| `\n` | Begin thinking |
-| `\n` | End thinking |
-
-### Example Tool Call
-
-    [START_INST]assistant[END_INST]
-    [START_TOOL_CALL]{"name": "list_directory", "arguments": {"path": "."}}[END_TOOL_CALL]
-
-### Example Tool Response
-
-    [START_INST]user[END_INST]
-    [START_TOOL_RESULT]
-    file1.txt
-    file2.py
-    [END_TOOL_RESULT]
+- `[START_INST]` / `[END_INST]`: Role delimiters
+- `[START_TOOL_CALL]` / `[END_TOOL_CALL]`: Tool wrapper
+- `` / ``: Thinking markers
 
 ---
 
-## Seed-Coder (Alpaca Fallback)
+## Qwen3.5-18B-A3B-REAP-Coding-Heretic
 
-**Models:** `Stable-DiffCoder-8B-Instruct.i1-Q4_K_S.gguf`
+**Model:** `qwen3.5-18b-a3b-reap-coding-heretic-v0.i1-Q4_K_S.gguf`
 
-### Structure
+### Architecture
+| Spec | Value | Notes |
+|------|-------|-------|
+| Total params | 19B | From 35B-A3B |
+| Active params/tok | ~3B | MoE sparse |
+| Experts/layer | 128 | NOT pruned |
+| Experts/tok | 8 | Unchanged |
+| Layers | 40 | Same as 35B |
+| Embedding | 2048 | Same as 35B |
+| KV heads | 2 | GQA |
+| Context | 262K | Same |
+| RoPE freq_base | 10,000,000 | Excellent |
+| Full attn interval | Every 4th layer | Hybrid SSM |
+| Quantization | Q4_K_S (i1) | Imatrix |
+| Size | 10.7GB | Larger |
+| Imatrix | 510 entries, 319 chunks | Excellent |
 
-- System: `[INST]system\nYou are an AI programming assistant...\n[/INST]`
-- User: `[INST]user\ncontent\n[/INST]`
-- Assistant: `[INST]assistant\ncontent\n[/INST]`
+### Heretic Details
+- **Source:** Flagstone8878/Qwen3.5-18B-REAP-A3B-Coding
+- **Abliteration:** tvall43, Trial 34
+- **Refusals:** 15/100 (85% compliance)
+- **KL divergence:** 0.0690 (minimal loss)
 
-### Notes
+### 18B Coding vs 14B Claude
+| Aspect | 18B Coding | 14B Claude |
+|--------|-----------|------------|
+| Experts/layer | 128 (full) | 93 (pruned) |
+| Specialization | Code | Reasoning |
+| Imatrix | 510/319 | Not listed |
+| Size | 10.7GB | 8.84GB |
+| Heretic | Yes | No |
 
-- No tool calling support in this template
-- Simple instruction-following format only
-- Best used for coding tasks without tool requirements
-
----
-
-## Notes
-
-- llama-server auto-detects templates from GGUF metadata
-- When loading a model, check the startup logs for "chat template:" to see which template was detected
-- If no template is found, llama-server falls back to a basic format
-- Tool calling support depends on the model having the correct template metadata in the GGUF file
+### Chat Template
+Complex Qwen3.5 format:
+- System with tool definitions
+- User/Assistant with `` markers
+- Tool calls: `
