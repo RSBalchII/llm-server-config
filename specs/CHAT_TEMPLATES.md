@@ -15,6 +15,7 @@ Templates for all supported models. llama-server auto-detects from GGUF metadata
 | DeepSeek Distill (14B) | `deepseek-r1-qwen` | See below | Yes |
 | Qwen3 / Qwen3.5 | `qwen3` | See below | Yes |
 | Qwen3.5-18B-Coding-Heretic | `qwen35` | See below | Yes |
+| Qwen3-Next-15B-A3B-Thinking | `qwen3next` | See below | Yes |
 | Seed-Coder | `alpaca` | None | No |
 
 ---
@@ -73,7 +74,10 @@ Same as Gemma 4, just fewer layers.
 - BOS: `<|begin▁of▁sentence|>` (ID: 151646)
 - User: `<|User|>content`, Assistant: `<|Assistant|>content<|end▁of▁sentence|>`
 - Tool: `<|tool_call_begin|>function<|tool_sep|>name + json<|tool_call_end|>`
-- Thinking: `` -> content -> ``
+- Thinking: `
+</think>
+
+ -> content -> `
 
 ---
 
@@ -101,12 +105,18 @@ Same template as 7B. Same token IDs.
 - User: `[START_INST]user\ncontent[END_INST]`
 - Assistant: `[START_INST]assistant\ncontent[END_INST]`
 - Tool: `[START_TOOL_CALL]{"name":"name","arguments":{}}[END_TOOL_CALL]`
-- Thinking: `` -> content -> ``
+- Thinking: `
+</think>
+
+ -> content -> ``
 
 ### Key Tokens
 - `[START_INST]` / `[END_INST]`: Role delimiters
 - `[START_TOOL_CALL]` / `[END_TOOL_CALL]`: Tool wrapper
-- `` / ``: Thinking markers
+- `
+</think>
+
+` / ``: Thinking markers
 
 ---
 
@@ -150,4 +160,71 @@ Same template as 7B. Same token IDs.
 Complex Qwen3.5 format:
 - System with tool definitions
 - User/Assistant with `` markers
-- Tool calls: `
+- Tool calls: `## Qwen3-Next-15B-A3B-Thinking
+
+**Model:** `Qwen3-Next-REAP-15B-A3B-Thinking-MXFP4_MOE.gguf`
+
+### Architecture
+| Spec | Value | Notes |
+|------|-------|-------|
+| Total params | 17B (listed as 15B) | From 80B-A3B |
+| Active params/tok | ~3B | MoE sparse |
+| Experts/layer | 96 (pruned from 512!) | **81.25% compression** |
+| Experts/tok | **10** | More than Qwen3.5 (8) |
+| Shared experts | 1 | Extra shared FFN |
+| Layers | 48 | Same as 80B |
+| Embedding | 2048 | Same as 80B |
+| KV heads | 2 | GQA |
+| Context | 262K native, **1M extensible** | Best-in-class |
+| RoPE freq_base | 10,000,000 | Excellent |
+| Hybrid layout | 12x(3x(GDN→MoE)→1x(Attn→MoE)) | Novel |
+| SSM | Gated DeltaNet | Linear attention |
+| Full attn interval | Every 4th layer | 12 attn layers total |
+| Quantization | **MXFP4_MOE** | Novel mixed precision |
+| Size | 12.5GB | Larger than Qwen3.5 |
+| License | Apache-2.0 | Open |
+
+### What is Qwen3-Next?
+**Completely new architecture** (not just pruned Qwen3.5):
+- Based on **Qwen3-Next-80B-A3B-Thinking** (80B base)
+- REAP pruned 81.25%: 512 → 96 experts/layer
+- **10 active experts** (vs 8 in Qwen3.5)
+- Hybrid: 3 Gated DeltaNet layers + 1 Full Attention per block
+- Specialized: Math, Physics, Control Engineering, Scientific Writing
+- Context extensible to **1M tokens**
+
+### Hybrid Layout
+```
+Block (x12):
+  ├── Gated DeltaNet → MoE  (3x)
+  └── Gated Attention → MoE (1x)
+```
+
+**Gated DeltaNet (SSM):**
+- 32 linear attention heads for V
+- 16 heads for QK
+- Head dim: 128
+- Conv kernel: 4
+
+**Gated Attention:**
+- 16 Q heads, 2 KV heads (GQA)
+- Head dim: 256
+- RoPE dim: 64
+
+### Qwen3-Next vs Qwen3.5-18B
+| Aspect | Qwen3-Next-15B | Qwen3.5-18B |
+|--------|---------------|-------------|
+| Base model | 80B-A3B | 35B-A3B |
+| Experts/layer | 96 (81% pruned) | 128 (not pruned) |
+| Experts/tok | **10** | 8 |
+| Layers | 48 | 40 |
+| Architecture | GDN+Attn hybrid | SSM+Attn hybrid |
+| Full attn layers | 12 | 10 |
+| Context | 262K, **1M extensible** | 262K |
+| Quantization | **MXFP4_MOE** | Q4_K_S |
+| Size | 12.5GB | 10.7GB |
+| Specialization | Math/Physics/Science | Code |
+
+### Chat Template
+Qwen3.5-style with `` thinking:
+- System: `
