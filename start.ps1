@@ -1,4 +1,4 @@
-﻿# micro-nanobot v0.4.0 - PowerShell Launcher
+﻿# micro-nanobot v0.4.0 - PowerShell Launcher with Speculative Decoding
 # Usage: .\start.ps1
 
 $ErrorActionPreference = "Stop"
@@ -115,11 +115,76 @@ switch ($GpuChoice) {
     default { $GpuLayers = "auto"; $GpuLabel = "auto" }
 }
 
+# Speculative Decoding Setup
+Write-Host ""
+Write-Host "Speculative Decoding:" -ForegroundColor Magenta
+Write-Host "  Uses a small draft model to predict tokens, then large model verifies" -ForegroundColor DarkGray
+Write-Host "  Speedup: 2-3x generation speed with minimal quality loss" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  1) Enable - Select draft model (Recommended)" -ForegroundColor Green
+Write-Host "  2) Skip - Use target model only" -ForegroundColor DarkGray
+Write-Host ""
+
+$SpecChoice = Read-Host "Enable speculative decoding? (1-2, default: 1)"
+if ([string]::IsNullOrWhiteSpace($SpecChoice)) { $SpecChoice = "1" }
+
+$DraftModel = $null
+$DraftGpuLayers = "auto"
+
+if ($SpecChoice -eq "1") {
+    Write-Host ""
+    Write-Host "Select draft model (small, 1-4B recommended):" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Filter for small models (<5GB)
+    $DraftModels = $Models | Where-Object { $_.Size -lt 5GB } | Sort-Object { $_.Size }
+
+    if ($DraftModels.Count -eq 0) {
+        Write-Host "  No draft models found (<5GB). Using target only." -ForegroundColor Yellow
+        $SpecChoice = "2"
+    } else {
+        for ($i = 0; $i -lt $DraftModels.Count; $i++) {
+            $dm = $DraftModels[$i]
+            $sizeGB = [math]::Round($dm.Size / 1GB, 1)
+            Write-Host "  $($i + 1)) $($dm.Name) ($sizeGB GB)" -ForegroundColor DarkGray
+        }
+        Write-Host "  0) Skip draft" -ForegroundColor Yellow
+        Write-Host ""
+
+        $DraftChoice = Read-Host "Select draft model (number)"
+        $DraftNum = [int]$DraftChoice
+
+        if ($DraftNum -gt 0 -and $DraftNum -le $DraftModels.Count) {
+            $DraftModel = $DraftModels[$DraftNum - 1]
+            Write-Host ""
+            Write-Host "Draft model: $($DraftModel.Name)" -ForegroundColor Green
+            Write-Host "Draft GPU layers (default: auto):" -ForegroundColor DarkGray
+            $DraftGpuChoice = Read-Host "  1) auto  2) max  3) custom"
+            switch ($DraftGpuChoice) {
+                "1" { $DraftGpuLayers = "auto" }
+                "2" { $DraftGpuLayers = "all" }
+                "3" {
+                    $LayerNum = Read-Host "  Enter draft layer count"
+                    $DraftGpuLayers = [int]$LayerNum
+                }
+                default { $DraftGpuLayers = "auto" }
+            }
+        } else {
+            Write-Host "  Skipping draft model." -ForegroundColor Yellow
+            $SpecChoice = "2"
+        }
+    }
+}
+
 Write-Host ""
 Write-Host "========================================"
 Write-Host "  Model: $($Selected.Name)" -ForegroundColor Green
 Write-Host "  Size: $SizeGB GB" -ForegroundColor DarkGray
 Write-Host "  GPU: $GpuLabel" -ForegroundColor Yellow
+if ($DraftModel) {
+    Write-Host "  Draft: $($DraftModel.Name)" -ForegroundColor Cyan
+    Write-Host "  Draft GPU: $DraftGpuLayers" -ForegroundColor DarkGray
+}
 Write-Host "  Port: http://127.0.0.1:$Port" -ForegroundColor Cyan
 Write-Host "========================================"
 Write-Host ""
@@ -128,7 +193,25 @@ Write-Host ""
 Write-Host "Press Ctrl+C to stop the server." -ForegroundColor DarkGray
 Write-Host ""
 
+# Build command
+$CmdArgs = @(
+    "-m", "`"$($Selected.Path)`"",
+    "--port", $Port,
+    "--gpu-layers", $GpuLayers,
+    "--ctx-size", "262144"
+)
+
+if ($DraftModel) {
+    $CmdArgs += @(
+        "--model-draft", "`"$($DraftModel.Path)`"",
+        "--draft-gpu-layers", $DraftGpuLayers,
+        "--draft-p-min", "0.75",
+        "--draft-max", "16"
+    )
+    Write-Host "Speculative decoding enabled (min confidence: 75%, max draft: 16 tokens)" -ForegroundColor Magenta
+}
+
 # Launch llama-server
 $ServerPath = Join-Path $ScriptDir "bin"
 Set-Location $ServerPath
-& $LlamaServer -m $Selected.Path --port $Port --gpu-layers $GpuLayers --ctx-size 131072
+& $LlamaServer @CmdArgs
