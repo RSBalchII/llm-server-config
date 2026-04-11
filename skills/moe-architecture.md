@@ -1,7 +1,7 @@
 # MoE (Mixture of Experts) Architecture
 
 ## Triggers
-- MoE, mixture of experts, expert routing, A3B, active parameters, sparse model, expert count, gated delta net, REAP, expert pruning, Cerebras REAP
+- MoE, mixture of experts, expert routing, A3B, active parameters, sparse model, expert count, gated delta net, REAP, expert pruning, Cerebras REAP, Qwen3-Next, GDN, hybrid architecture
 
 ## Core Concepts
 
@@ -121,14 +121,25 @@ qwen35moe.full_attention_interval = 4  # Every 4th layer uses full attn
 | Quality | Baseline | ~85-95% retained |
 | Speed | Same | Same or faster (fewer layers) |
 
+### Qwen3-Next: Next-Gen Hybrid Architecture
+**Completely new architecture** (not just pruned Qwen3.5):
+- Base: Qwen3-Next-80B-A3B-Thinking → REAP to 15B
+- **81.25% expert pruning**: 512 → 96 experts/layer
+- **10 active experts** (vs 8 in Qwen3.5)
+- Hybrid layout: `12x(3x(GDN→MoE) → 1x(Attn→MoE))`
+- Gated DeltaNet (SSM): 32 linear attn heads for V, 16 for QK
+- Gated Attention: 16 Q heads, 2 KV heads, full attn every 4th layer
+- Context: **262K native, 1M extensible**
+- MXFP4_MOE quantization: novel microscaling format
+
 ### Troubleshooting
-**Problem**: `cannot meet free memory target`  
+**Problem**: `cannot meet free memory target`
 **Solution**: MoE models need less VRAM than size suggests; reduce context size or use `auto` GPU layers
 
-**Problem**: Slow generation despite MoE  
+**Problem**: Slow generation despite MoE
 **Solution**: Check if KV cache is on GPU; CPU KV cache bottlenecks MoE routing
 
-**Problem**: Model loads but errors on generation  
+**Problem**: Model loads but errors on generation
 **Solution**: MoE requires VMM (Virtual Memory Management); ensure CUDA device supports it (`VMM: yes` in startup log)
 
 ## Safe
