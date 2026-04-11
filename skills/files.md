@@ -87,7 +87,7 @@ File and directory operations, including append, prepend, replace, move, and cop
 | `loader.js` | Skill file parser and hot-reload system |
 | `search.md` | Search operations, grep, find, pattern matching |
 | `system.md` | System info, process management, environment |
-| `moe-architecture.md` | MoE models, expert routing, A3B, sparse parameters, VMM |
+| `moe-architecture.md` | MoE models, expert routing, A3B, REAP pruning, VMM |
 | `gguf-quantization.md` | IQ4_XS, Q4_K_M, Q5_K_S, BPW, imatrix, calibration |
 | `physics-walker.md` | Graph search, radial inflation, context inflator, atoms/molecules |
 | `kv-cache-vram.md` | VRAM management, KV cache, checkpointing, GPU offloading |

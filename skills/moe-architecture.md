@@ -1,7 +1,7 @@
 # MoE (Mixture of Experts) Architecture
 
 ## Triggers
-- MoE, mixture of experts, expert routing, A3B, active parameters, sparse model, expert count, gated delta net
+- MoE, mixture of experts, expert routing, A3B, active parameters, sparse model, expert count, gated delta net, REAP, expert pruning, Cerebras REAP
 
 ## Core Concepts
 
@@ -78,6 +78,48 @@ qwen35moe.full_attention_interval = 4  # Every 4th layer uses full attn
 | Token Generation | Faster than dense of same size | Only 8 experts compute vs full 35B |
 | Memory Bandwidth | Lower than dense | Smaller active weight set |
 | KV Cache | Same as dense | Depends on embedding size, not experts |
+
+### REAP (Router-weighted Expert Activation Pruning)
+**What is REAP?**
+- Prunes least-used experts from MoE models
+- Preserves active params/tok (only total params decrease)
+- Uses calibration data to score experts by importance
+
+**Example: Gemma-4-19B-A4B-REAP**
+- Original: 26B-A4B, 128 experts/layer, 48 layers
+- REAP 0.30: 19B-A4B, 90 experts/layer, 30 layers
+- Active params/tok: ~4B (unchanged!)
+- Experts/tok: 8 (unchanged!)
+
+**How REAP Works:**
+1. **Calibration**: Run model on 22K diverse samples
+2. **Scoring**: Score experts by router gate values + activation norms
+3. **Pruning**: Remove lowest-scoring 30% (38 of 128 per layer)
+4. **Renormalization**: Adjust router logits to work with remaining experts
+
+**REAP Quality Impact:**
+| Task | Original | REAP 0.30 | Change |
+|------|----------|-----------|--------|
+| Elementary Math | 92% | 88% | -4% |
+| College CS | 56% | 68% | +12%! |
+| Philosophy | 92% | 74% | -18% |
+| Long context loops | 50% | 0% | Fixed! |
+
+**Why REAP is Smart:**
+- Removes redundant experts, not critical ones
+- Router still selects 8 experts from remaining pool
+- VRAM savings from fewer total experts + fewer layers
+- Can improve some tasks (College CS improved 12%!)
+
+**REAP vs Standard MoE:**
+| Aspect | Standard MoE | REAP-Pruned MoE |
+|--------|--------------|-----------------|
+| Total params | Full (e.g., 26B) | Reduced (e.g., 19B) |
+| Active params/tok | Unchanged (e.g., 4B) | Unchanged (e.g., 4B) |
+| Experts/layer | Full (e.g., 128) | Pruned (e.g., 90) |
+| VRAM usage | Higher | Lower |
+| Quality | Baseline | ~85-95% retained |
+| Speed | Same | Same or faster (fewer layers) |
 
 ### Troubleshooting
 **Problem**: `cannot meet free memory target`  
