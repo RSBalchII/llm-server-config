@@ -249,6 +249,14 @@ async function main() {
                     session._chatHistory.pop();
                 }
 
+                // For thinking models, increase maxTokens to allow both thinking + response
+                // Gemma 4, Qwen3.5, DeepSeek all use thinking which can consume 1000-4000 tokens
+                const isThinkingModel = sel.name.toLowerCase().includes('gemma') || 
+                                        sel.name.toLowerCase().includes('qwen3.5') ||
+                                        sel.name.toLowerCase().includes('deepseek') ||
+                                        sel.name.toLowerCase().includes('reasoning');
+                const defaultMaxTokens = isThinkingModel ? 8192 : 4096;
+
                 // Non-streaming (default) - uses onToken callback for token-by-token streaming
                 if (!stream) {
                     res.writeHead(200, {
@@ -258,27 +266,40 @@ async function main() {
                         'Access-Control-Allow-Origin': '*'
                     });
 
+                    let thinkingEnded = false;
                     const text = await session.prompt(userMsg, {
-                        maxTokens: parsed.max_tokens ?? 2048,
+                        maxTokens: parsed.max_tokens ?? defaultMaxTokens,
                         temperature: parsed.temperature ?? 0.6,
                         topK: parsed.top_k ?? 40,
                         topP: parsed.top_p ?? 0.9,
                         repeatPenalty: 1.1,
                         onToken: (token) => {
-                            res.write(`data: ${JSON.stringify({
-                                id: 'chatcmpl-' + Date.now(),
-                                object: 'chat.completion.chunk',
-                                created: Math.floor(Date.now() / 1000),
-                                model: sel.name,
-                                choices: [{
-                                    index: 0,
-                                    delta: { content: token },
-                                    finish_reason: null
-                                }]
-                            })}\n\n`);
+                            try {
+                                // Detect thinking end
+                                if (typeof token === 'string' && (token.includes('') || token.includes('<channel|>'))) {
+                                    thinkingEnded = true;
+                                    console.log('💭 Thinking ended, generating response...');
+                                }
+                                
+                                res.write(`data: ${JSON.stringify({
+                                    id: 'chatcmpl-' + Date.now(),
+                                    object: 'chat.completion.chunk',
+                                    created: Math.floor(Date.now() / 1000),
+                                    model: sel.name,
+                                    choices: [{
+                                        index: 0,
+                                        delta: { content: token },
+                                        finish_reason: null
+                                    }]
+                                })}\n\n`);
+                            } catch (err) {
+                                console.error('⚠️ onToken error:', err.message);
+                            }
                         }
                     });
 
+                    console.log(`💭 Thinking ended: ${thinkingEnded}`);
+                    
                     // Send final chunk with finish_reason
                     res.write(`data: ${JSON.stringify({
                         id: 'chatcmpl-' + Date.now(),
@@ -303,33 +324,47 @@ async function main() {
                 });
 
                 let buffer = '';
+                let thinkingEnded = false;
                 await session.prompt(userMsg, {
-                    maxTokens: parsed.max_tokens ?? 2048,
+                    maxTokens: parsed.max_tokens ?? defaultMaxTokens,
                     temperature: parsed.temperature ?? 0.6,
                     topK: parsed.top_k ?? 40,
                     topP: parsed.top_p ?? 0.9,
                     repeatPenalty: 1.1,
                     onToken: (tokens) => {
-                        // Detokenize to get the full text so far
-                        const fullText = llama.detokenize(tokens);
-                        // Extract only the new tokens since last call
-                        const newPart = fullText.slice(buffer.length);
-                        buffer = fullText;
+                        try {
+                            // Detokenize to get the full text so far
+                            const fullText = llama.detokenize(tokens);
+                            // Detect thinking end
+                            if (fullText.includes('') || fullText.includes('<channel|>')) {
+                                if (!thinkingEnded) {
+                                    thinkingEnded = true;
+                                    console.log('💭 Thinking ended (streaming), generating response...');
+                                }
+                            }
+                            // Extract only the new tokens since last call
+                            const newPart = fullText.slice(buffer.length);
+                            buffer = fullText;
 
-                        // Send only the new tokens
-                        res.write(`data: ${JSON.stringify({
-                            id: 'chatcmpl-' + Date.now(),
-                            object: 'chat.completion.chunk',
-                            created: Math.floor(Date.now() / 1000),
-                            model: sel.name,
-                            choices: [{
-                                index: 0,
-                                delta: { content: newPart },
-                                finish_reason: null
-                            }]
-                        })}\n\n`);
+                            // Send only the new tokens
+                            res.write(`data: ${JSON.stringify({
+                                id: 'chatcmpl-' + Date.now(),
+                                object: 'chat.completion.chunk',
+                                created: Math.floor(Date.now() / 1000),
+                                model: sel.name,
+                                choices: [{
+                                    index: 0,
+                                    delta: { content: newPart },
+                                    finish_reason: null
+                                }]
+                            })}\n\n`);
+                        } catch (err) {
+                            console.error('⚠️ onToken error:', err.message);
+                        }
                     }
                 });
+
+                console.log(`💭 Thinking ended (streaming): ${thinkingEnded}`);
 
                 // Send final chunk with finish_reason
                 res.write(`data: ${JSON.stringify({
